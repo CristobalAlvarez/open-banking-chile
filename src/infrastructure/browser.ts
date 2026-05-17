@@ -10,6 +10,8 @@ export interface BrowserOptions {
   viewport?: { width: number; height: number };
   /** Callback invocado en cada línea de debug en tiempo real */
   onDebug?: (line: string) => void;
+  /** URL del proxy SOCKS5/HTTP (ej: "socks5://100.109.27.125:1080") */
+  proxyUrl?: string;
 }
 
 export interface BrowserSession {
@@ -54,7 +56,7 @@ export async function launchBrowser(
   options: BrowserOptions,
   saveScreenshots: boolean,
 ): Promise<BrowserSession> {
-  const { chromePath, headful, forceHeadful, extraArgs, viewport, onDebug } = options;
+  const { chromePath, headful, forceHeadful, extraArgs, viewport, onDebug, proxyUrl } = options;
   const debugLog: string[] = onDebug ? new DebugLog(onDebug) : [];
 
   // Some banks (e.g. BancoEstado) block headless browsers via TLS fingerprinting
@@ -78,10 +80,11 @@ export async function launchBrowser(
     );
   }
 
+  const proxyArgs = proxyUrl ? [`--proxy-server=${proxyUrl}`] : [];
   const browser = await puppeteer.launch({
     executablePath,
     headless: forceHeadful ? false : !headful,
-    args: [...DEFAULT_ARGS, ...(extraArgs || [])],
+    args: [...DEFAULT_ARGS, ...proxyArgs, ...(extraArgs || [])],
   });
 
   const page = await browser.newPage();

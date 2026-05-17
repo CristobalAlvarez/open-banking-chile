@@ -131,6 +131,8 @@ export interface ScraperOptions extends BankCredentials {
   onProgress?: (step: string) => void;
   /** Callback invocado en cada línea de debug en tiempo real */
   onDebug?: (line: string) => void;
+  /** URL del proxy SOCKS5/HTTP para las peticiones del browser (ej: "socks5://100.109.27.125:1080") */
+  proxyUrl?: string;
 }
 
 /** Interfaz que debe implementar cada banco */

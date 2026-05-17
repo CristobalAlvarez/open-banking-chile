@@ -14,7 +14,7 @@ const CMR_WAIT_MS = 30_000;
 // ─── Browser helpers ─────────────────────────────────────────────
 
 async function launchPlaywright(options: ScraperOptions): Promise<{ browser: Browser; page: Page; debugLog: string[] }> {
-  const { chromePath, headful, onDebug } = options;
+  const { chromePath, headful, onDebug, proxyUrl } = options;
   const debugLog: string[] = onDebug ? new DebugLog(onDebug) : [];
 
   const execPath = findChrome(chromePath);
@@ -29,6 +29,7 @@ async function launchPlaywright(options: ScraperOptions): Promise<{ browser: Bro
   const browser = await chromium.launch({
     executablePath: execPath,
     headless: !headful,
+    ...(proxyUrl ? { proxy: { server: proxyUrl } } : {}),
     args: [
       "--no-sandbox",
       "--disable-setuid-sandbox",
