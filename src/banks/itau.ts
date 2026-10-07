@@ -45,6 +45,21 @@ async function waitForLoginForm(page: Page): Promise<"ok" | "blocked" | "timeout
   }
 }
 
+/**
+ * Navigates the portal. The IBM WebSphere pages keep long-lived requests open
+ * (analytics, polling), so `networkidle2` sometimes never settles on slower
+ * hosts and a strict timeout aborts an otherwise successful load. The DOM is
+ * ready by then, and every caller waits for the content afterwards, so a
+ * timeout here is not fatal.
+ */
+async function gotoPortal(page: Page, url: string): Promise<void> {
+  try {
+    await page.goto(url, { waitUntil: "networkidle2", timeout: 45000 });
+  } catch {
+    /* page still loads; callers wait for the rendered content */
+  }
+}
+
 async function itauLogin(
   page: Page,
   rut: string,
@@ -133,7 +148,7 @@ async function itauLogin(
 
 async function extractBalance(page: Page, debugLog: string[]): Promise<number | undefined> {
   debugLog.push("6. Extracting balance...");
-  await page.goto(`${PORTAL_BASE}/cuentas/cuenta-corriente/saldos`, { waitUntil: "networkidle2", timeout: 20000 });
+  await gotoPortal(page, `${PORTAL_BASE}/cuentas/cuenta-corriente/saldos`);
   await delay(2000);
   const balance = await page.evaluate(() => {
     const text = document.body?.innerText || "";
@@ -147,7 +162,7 @@ async function extractBalance(page: Page, debugLog: string[]): Promise<number | 
 
 async function extractMovements(page: Page, debugLog: string[]): Promise<BankMovement[]> {
   debugLog.push("7. Extracting movements...");
-  await page.goto(`${PORTAL_BASE}/cuentas/cuenta-corriente/saldos-ultimo-movimiento`, { waitUntil: "networkidle2", timeout: 20000 });
+  await gotoPortal(page, `${PORTAL_BASE}/cuentas/cuenta-corriente/saldos-ultimo-movimiento`);
   await delay(3000);
 
   const allMovements: BankMovement[] = [];
@@ -194,7 +209,7 @@ async function extractCreditCardData(page: Page, debugLog: string[]): Promise<{ 
   const movements: BankMovement[] = [];
   const creditCards: CreditCardBalance[] = [];
 
-  await page.goto(`${PORTAL_BASE}/tarjeta-credito/resumen/deuda`, { waitUntil: "networkidle2", timeout: 20000 });
+  await gotoPortal(page, `${PORTAL_BASE}/tarjeta-credito/resumen/deuda`);
   await delay(3000);
 
   const tcInfo = await page.evaluate(() => {
@@ -242,7 +257,7 @@ async function extractCreditCardData(page: Page, debugLog: string[]): Promise<{ 
   }
 
   // Facturados
-  await page.goto(`${PORTAL_BASE}/tarjeta-credito/resumen/cuenta-nacional`, { waitUntil: "networkidle2", timeout: 20000 });
+  await gotoPortal(page, `${PORTAL_BASE}/tarjeta-credito/resumen/cuenta-nacional`);
   await delay(3000);
 
   const facturados = await page.evaluate(() => {

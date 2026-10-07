@@ -160,7 +160,7 @@ npx open-banking-chile --bank falabella --screenshots --pretty
 | `--pretty`          | JSON formateado                                                 |
 | `--movements`       | Solo array de movimientos                                       |
 | `--screenshots`     | Guardar screenshots locales en `./screenshots/`                 |
-| `--headful`         | Chrome visible (debugging). **BancoEstado siempre usa headful** |
+| `--headful`         | Chrome visible (debugging). **BancoEstado e Itaú siempre usan headful** |
 | `--owner <T\|A\|B>` | Filtro Titular/Adicional para TC (default: B = todos)           |
 
 ### Como librería
@@ -314,7 +314,7 @@ src/
     bice.ts                   — Banco BICE
     cencosud.ts               — Tarjeta Cencosud (hCaptcha intermitente, requiere --headful si aparece)
     edwards.ts                — Banco Edwards
-    itau.ts                   — Itaú
+    itau.ts                   — Itaú (requiere headful: Imperva bloquea headless)
     santander.ts              — Banco Santander
     scotiabank.ts             — Scotiabank Chile
 ```
@@ -385,7 +385,15 @@ interface BankScraper {
 | 0 movimientos         | Usa `--screenshots --pretty` y revisa el debug log                                             |
 | Login falla           | Verifica RUT y clave, prueba con `--headful`                                                   |
 | BancoEstado bloqueado | BancoEstado bloquea headless (TLS fingerprinting). Siempre abre Chrome visible. Ver nota abajo |
+| Itaú bloqueado        | Imperva sirve "Access Denied" a headless y a User-Agents falsos. Corre en headful (Xvfb en servidores). Ver nota abajo |
 | Cencosud pide CAPTCHA | Ocurre ocasionalmente. En headless retorna error — reintenta con `--headful` para resolverlo manualmente |
+
+### Itaú e Imperva
+
+Itaú corre detrás de Imperva (reese84). El login sigue usando `#loginNameID` / `#pswdId`, pero Imperva responde con un challenge o con "Access Denied" cuando detecta automatización. Dos cosas gatillan el bloqueo, ambas ya resueltas en `itau.ts`:
+
+- **headless**: cualquier sesión headless queda bloqueada (probado con `puppeteer-core` y `rebrowser-puppeteer-core`). El scraper fuerza headful; en Linux requiere Xvfb (`DISPLAY=:99`).
+- **User-Agent falso**: `DEFAULT_UA` está fijo en `Chrome/131` y no calza con el Chrome instalado, lo que delata la automatización. Itaú usa `skipUserAgentOverride` para conservar el UA real.
 
 ### BancoEstado y modo headless
 
