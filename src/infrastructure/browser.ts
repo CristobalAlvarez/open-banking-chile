@@ -6,6 +6,12 @@ export interface BrowserOptions {
   headful?: boolean;
   /** Force headless mode off (e.g., Banco Estado TLS fingerprinting) */
   forceHeadful?: boolean;
+  /**
+   * Keep Chrome's native User-Agent instead of overriding it with DEFAULT_UA.
+   * Required for banks behind fingerprint-based WAFs (e.g. Itaú/Imperva), where a
+   * UA that doesn't match the installed Chrome build gets the session blocked.
+   */
+  skipUserAgentOverride?: boolean;
   extraArgs?: string[];
   viewport?: { width: number; height: number };
   /** Callback invocado en cada línea de debug en tiempo real */
@@ -56,7 +62,7 @@ export async function launchBrowser(
   options: BrowserOptions,
   saveScreenshots: boolean,
 ): Promise<BrowserSession> {
-  const { chromePath, headful, forceHeadful, extraArgs, viewport, onDebug, proxyUrl } = options;
+  const { chromePath, headful, forceHeadful, skipUserAgentOverride, extraArgs, viewport, onDebug, proxyUrl } = options;
   const debugLog: string[] = onDebug ? new DebugLog(onDebug) : [];
 
   // Some banks (e.g. BancoEstado) block headless browsers via TLS fingerprinting
@@ -90,7 +96,7 @@ export async function launchBrowser(
   const page = await browser.newPage();
   const vp = viewport || { width: 1280, height: 900 };
   await page.setViewport(vp);
-  await page.setUserAgent(DEFAULT_UA);
+  if (!skipUserAgentOverride) await page.setUserAgent(DEFAULT_UA);
 
   // Hide automation signals
   await page.evaluateOnNewDocument(() => {

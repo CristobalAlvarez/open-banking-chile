@@ -18,6 +18,33 @@ const TWO_FACTOR_CONFIG = {
 
 // ─── Itaú-specific helpers ───────────────────────────────────────
 
+const LOGIN_FORM_TIMEOUT_MS = 25000;
+
+/**
+ * Waits for the Itaú login form to be usable.
+ *
+ * The site sits behind Imperva, which serves either a JS challenge or a hard
+ * "Access Denied" block page to automated sessions instead of the login form.
+ * Detecting that state lets us report the real cause instead of a misleading
+ * "missing RUT field".
+ */
+async function waitForLoginForm(page: Page): Promise<"ok" | "blocked" | "timeout"> {
+  try {
+    await page.waitForSelector("#loginNameID", { timeout: LOGIN_FORM_TIMEOUT_MS });
+    return "ok";
+  } catch {
+    // waitForSelector tolerates the navigations the Imperva challenge performs.
+    const blocked = await page
+      .evaluate(() =>
+        /Access Denied|Acceso restringido|Pardon Our Interruption|actividad inusual|No pudimos validar tu acceso/i.test(
+          document.body?.innerText || "",
+        ),
+      )
+      .catch(() => false);
+    return blocked ? "blocked" : "timeout";
+  }
+}
+
 async function itauLogin(
   page: Page,
   rut: string,
@@ -26,12 +53,25 @@ async function itauLogin(
   doSave: (page: Page, name: string) => Promise<void>,
 ): Promise<{ success: boolean; error?: string; screenshot?: string }> {
   debugLog.push("1. Navigating to login page...");
-  await page.goto(LOGIN_URL, { waitUntil: "networkidle2", timeout: 30000 });
+  await page.goto(LOGIN_URL, { waitUntil: "networkidle2", timeout: 30000 }).catch(() => {
+    /* the Imperva challenge/interstitial may never reach networkidle2 */
+  });
   await delay(2000);
   await doSave(page, "01-login");
 
-  debugLog.push("2. Filling RUT...");
-  const rutEl = await page.$("#loginNameID");
+  debugLog.push("2. Waiting for login form...");
+  const formState = await waitForLoginForm(page);
+  if (formState === "blocked") {
+    const ss = await page.screenshot({ encoding: "base64" });
+    return {
+      success: false,
+      error:
+        "Itaú bloqueó la sesión (protección anti-bot Imperva): la página de login nunca cargó. " +
+        "El scraper debe correr en modo headful (con display/Xvfb) y sin sobreescribir el User-Agent.",
+      screenshot: ss as string,
+    };
+  }
+  const rutEl = formState === "ok" ? await page.$("#loginNameID") : null;
   if (!rutEl) {
     const ss = await page.screenshot({ encoding: "base64" });
     return { success: false, error: "No se encontró campo de RUT (#loginNameID)", screenshot: ss as string };
@@ -256,10 +296,21 @@ async function scrapeItau(session: BrowserSession, options: ScraperOptions): Pro
   progress("Extrayendo datos de tarjeta de crédito...");
   const tcResult = await extractCreditCardData(page, debugLog);
 
-  const deduplicatedAccount = deduplicateMovements(accountMovements);
+  // extractCreditCardData returns card movements in a separate array. Attach them
+  // to their card, otherwise consumers never receive them (bort reads
+  // creditCards[].movements). Itaú exposes a single card, so all belong to it.
+  const card = tcResult.creditCards[0];
+  if (card) {
+    const mask = card.label.match(/\*{4}\d{4}/)?.[0];
+    if (mask) for (const m of tcResult.movements) m.card = mask;
+    card.movements = tcResult.movements;
+  }
 
-  debugLog.push(`9. Total: ${deduplicatedAccount.length} account movements`);
-  progress(`Listo — ${deduplicatedAccount.length} movimientos totales`);
+  const deduplicatedAccount = deduplicateMovements(accountMovements);
+  const totalTc = card?.movements?.length ?? 0;
+
+  debugLog.push(`9. Total: ${deduplicatedAccount.length} account + ${totalTc} TC movements`);
+  progress(`Listo — ${deduplicatedAccount.length + totalTc} movimientos totales`);
   await doSave(page, "05-final");
   const ss = doScreenshots ? (await page.screenshot({ encoding: "base64" })) as string : undefined;
 
@@ -273,7 +324,11 @@ const itau: BankScraper = {
   id: "itau",
   name: "Itaú",
   url: "https://banco.itau.cl",
-  scrape: (options) => runScraper("itau", options, {}, scrapeItau),
+  // Itaú sits behind Imperva (reese84): headless Chrome and a User-Agent that
+  // doesn't match the installed Chrome build both get the session blocked.
+  // Requires a display — on headless Linux use Xvfb (DISPLAY=:99).
+  scrape: (options) =>
+    runScraper("itau", options, { forceHeadful: true, skipUserAgentOverride: true }, scrapeItau),
 };
 
 export default itau;
