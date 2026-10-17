@@ -1,5 +1,5 @@
 import puppeteer, { type Browser, type Page } from "puppeteer-core";
-import { DebugLog, findChrome, saveScreenshot } from "../utils.js";
+import { DebugLog, findChrome, saveHtml, saveScreenshot } from "../utils.js";
 
 export interface BrowserOptions {
   chromePath?: string;
@@ -26,6 +26,8 @@ export interface BrowserSession {
   debugLog: string[];
   /** Save a named screenshot (noop if screenshots disabled) */
   screenshot: (page: Page, name: string) => Promise<void>;
+  /** Save the page HTML to debug/ (noop if screenshots disabled) */
+  saveHtml: (page: Page, name: string) => Promise<void>;
 }
 
 const DEFAULT_ARGS = [
@@ -106,5 +108,8 @@ export async function launchBrowser(
   const doSave = async (p: Page, name: string) =>
     saveScreenshot(p, name, saveScreenshots, debugLog);
 
-  return { browser, page, debugLog, screenshot: doSave };
+  const doSaveHtml = async (p: Page, name: string) =>
+    saveHtml(p, name, saveScreenshots, debugLog);
+
+  return { browser, page, debugLog, screenshot: doSave, saveHtml: doSaveHtml };
 }

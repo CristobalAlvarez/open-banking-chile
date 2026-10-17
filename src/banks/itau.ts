@@ -66,6 +66,7 @@ async function itauLogin(
   password: string,
   debugLog: string[],
   doSave: (page: Page, name: string) => Promise<void>,
+  doSaveHtml: (page: Page, name: string) => Promise<void>,
 ): Promise<{ success: boolean; error?: string; screenshot?: string }> {
   debugLog.push("1. Navigating to login page...");
   await page.goto(LOGIN_URL, { waitUntil: "networkidle2", timeout: 30000 }).catch(() => {
@@ -73,6 +74,7 @@ async function itauLogin(
   });
   await delay(2000);
   await doSave(page, "01-login");
+  await doSaveHtml(page, "01-login");
 
   debugLog.push("2. Waiting for login form...");
   const formState = await waitForLoginForm(page);
@@ -109,6 +111,7 @@ async function itauLogin(
   try { await page.waitForNavigation({ timeout: 20000 }); } catch { /* SPA */ }
   await delay(3000);
   await doSave(page, "03-after-submit");
+  await doSaveHtml(page, "03-after-submit");
 
   // Login error check
   const errorText = await page.evaluate(() => {
@@ -146,10 +149,11 @@ async function itauLogin(
   return { success: true };
 }
 
-async function extractBalance(page: Page, debugLog: string[]): Promise<number | undefined> {
+async function extractBalance(page: Page, debugLog: string[], doSaveHtml: (page: Page, name: string) => Promise<void>): Promise<number | undefined> {
   debugLog.push("6. Extracting balance...");
   await gotoPortal(page, `${PORTAL_BASE}/cuentas/cuenta-corriente/saldos`);
   await delay(2000);
+  await doSaveHtml(page, "06-balance");
   const balance = await page.evaluate(() => {
     const text = document.body?.innerText || "";
     const match = text.match(/Saldo disponible para uso\s*\$\s*([\d.,]+)/);
@@ -160,7 +164,7 @@ async function extractBalance(page: Page, debugLog: string[]): Promise<number | 
   return balance;
 }
 
-async function extractMovements(page: Page, debugLog: string[]): Promise<BankMovement[]> {
+async function extractMovements(page: Page, debugLog: string[], doSaveHtml: (page: Page, name: string) => Promise<void>): Promise<BankMovement[]> {
   debugLog.push("7. Extracting movements...");
   await gotoPortal(page, `${PORTAL_BASE}/cuentas/cuenta-corriente/saldos-ultimo-movimiento`);
   await delay(3000);
@@ -168,6 +172,7 @@ async function extractMovements(page: Page, debugLog: string[]): Promise<BankMov
   const allMovements: BankMovement[] = [];
 
   for (let pageNum = 1; pageNum <= 10; pageNum++) {
+    await doSaveHtml(page, `07-movements-p${pageNum}`);
     const pageMovements = await page.evaluate(() => {
       const results: Array<{ date: string; description: string; cargo: string; abono: string; saldo: string }> = [];
       const rows = document.querySelectorAll("table tbody tr");
@@ -204,13 +209,163 @@ async function extractMovements(page: Page, debugLog: string[]): Promise<BankMov
   return allMovements;
 }
 
-async function extractCreditCardData(page: Page, debugLog: string[]): Promise<{ movements: BankMovement[]; creditCards: CreditCardBalance[] }> {
+// ─── Itaú TC: movimientos no facturados ──────────────────────────
+//
+// La página de deuda renderiza dos tablas de movimientos no facturados con
+// `name=` estables por celda (WebSphere/Dojo): la nacional (CLP, con columna
+// de cuotas) y la internacional (USD, sin cuotas). La nacional se detecta por
+// `MOLS_NUM_CUOTA`, que solo existe en ella. Ambas están paginadas por un
+// widget Dojo que re-renderiza la tabla al clickear `a[name="nextbtn"]`.
+
+const UNBILLED_CELLS = {
+  date: "FECHA_TRANSACCION_iso8601",
+  postDate: "FECHA_POSTEO_iso8601",
+  desc: "GLOSA_TRANSACCION",
+  installments: "MOLS_NUM_CUOTA",
+  amount: "MONTO_TRANSACCION_",
+} as const;
+
+const MAX_UNBILLED_PAGES = 20;
+
+export interface ItauUnbilledRow {
+  date: string;
+  desc: string;
+  amount: string;
+  isCredit: boolean;
+  installments: string;
+}
+
+export interface ItauBilledRow {
+  date: string;
+  desc: string;
+  total: string;
+  cuota: string;
+  valorCuota: string;
+}
+
+/** Convierte filas crudas de la tabla de no facturados (CLP) a movimientos. */
+export function normalizeItauUnbilledRows(rows: ItauUnbilledRow[]): BankMovement[] {
+  const movements: BankMovement[] = [];
+  for (const m of rows) {
+    const parsed = parseChileanAmount(m.amount);
+    if (parsed === 0) continue;
+    movements.push({
+      date: normalizeDate(m.date),
+      description: m.desc,
+      amount: m.isCredit ? Math.abs(parsed) : -Math.abs(parsed),
+      balance: 0,
+      source: MOVEMENT_SOURCE.credit_card_unbilled,
+      installments: normalizeInstallments(m.installments),
+    });
+  }
+  return movements;
+}
+
+/**
+ * Convierte filas crudas del estado de cuenta (cuenta nacional) a movimientos.
+ *
+ * "Valor cuota" es lo que se carga al período; para compras en cuotas es menor
+ * que "Monto Operación", que es el total de la operación. Ese total va en
+ * totalAmount ("Monto total a pagar") cuando difiere del cargo del período.
+ */
+export function normalizeItauBilledRows(rows: ItauBilledRow[]): BankMovement[] {
+  const movements: BankMovement[] = [];
+  for (const m of rows) {
+    const charged = parseChileanAmount(m.valorCuota);
+    if (charged === 0) continue;
+    const amount = charged > 0 ? -charged : Math.abs(charged);
+    const total = parseChileanAmount(m.total);
+    movements.push({
+      date: normalizeDate(m.date),
+      description: m.desc,
+      amount,
+      balance: 0,
+      source: MOVEMENT_SOURCE.credit_card_billed,
+      installments: normalizeInstallments(m.cuota),
+      ...(Math.abs(total) !== Math.abs(charged) ? { totalAmount: Math.abs(total) } : {}),
+    });
+  }
+  return movements;
+}
+
+async function extractUnbilledMovements(
+  page: Page,
+  debugLog: string[],
+  doSaveHtml: (page: Page, name: string) => Promise<void>,
+): Promise<BankMovement[]> {
+  const movements: BankMovement[] = [];
+
+  for (let pageNum = 1; pageNum <= MAX_UNBILLED_PAGES; pageNum++) {
+    const rows = await page.evaluate((cells) => {
+      // La tabla nacional puede venir envuelta por tablas de layout; elegir la más
+      // interna (la que "posee" sus celdas) evita duplicar la primera fila y evita
+      // mezclar la tabla internacional (USD, sin columna de cuotas).
+      const table = Array.from(document.querySelectorAll("table")).find((t) =>
+        Array.from(t.querySelectorAll(`[name="${cells.installments}"]`)).some((el) => el.closest("table") === t),
+      );
+      const results: Array<{ date: string; desc: string; amount: string; isCredit: boolean; installments: string }> = [];
+      if (!table) return results;
+      for (const row of table.querySelectorAll("tr")) {
+        const dateEl = row.querySelector(`[name="${cells.date}"]`) as HTMLElement | null;
+        const postDateEl = row.querySelector(`[name="${cells.postDate}"]`) as HTMLElement | null;
+        const descEl = row.querySelector(`[name="${cells.desc}"]`) as HTMLElement | null;
+        const amountEl = row.querySelector(`[name="${cells.amount}"]`) as HTMLElement | null;
+        const installmentsEl = row.querySelector(`[name="${cells.installments}"]`) as HTMLElement | null;
+        const date = ((dateEl || postDateEl)?.innerText || "").trim();
+        if (!/^\d{2}\/\d{2}\/\d{4}$/.test(date) || !descEl || !amountEl) continue;
+        results.push({
+          date,
+          desc: (descEl.innerText || "").trim(),
+          amount: (amountEl.innerText || "").trim(),
+          isCredit: amountEl.className.includes("abono"),
+          installments: (installmentsEl?.innerText || "").trim(),
+        });
+      }
+      return results;
+    }, UNBILLED_CELLS);
+
+    movements.push(...normalizeItauUnbilledRows(rows));
+    debugLog.push(`  No-facturados p${pageNum}: ${rows.length}`);
+    await doSaveHtml(page, `08-tc-deuda-p${pageNum}`);
+
+    const first = rows[0];
+    if (!first) break;
+    const canNext = await page.evaluate(() => !!document.querySelector('a[name="nextbtn"]'));
+    if (!canNext) break;
+    await page.evaluate(() => {
+      (document.querySelector('a[name="nextbtn"]') as HTMLElement | null)?.click();
+    });
+    // El widget Dojo re-renderiza la tabla vía AJAX: esperar a que cambie la primera fila.
+    const changed = await page
+      .waitForFunction(
+        (prev, cells) => {
+          const el = document.querySelector(`[name="${cells.date}"]`) as HTMLElement | null;
+          const row = el?.closest("tr");
+          if (!el || !row) return false;
+          const date = el.innerText?.trim() || "";
+          const desc = (row.querySelector(`[name="${cells.desc}"]`) as HTMLElement | null)?.innerText?.trim() || "";
+          return `${date}|${desc}` !== prev;
+        },
+        { timeout: 15000 },
+        `${first.date}|${first.desc}`,
+        UNBILLED_CELLS,
+      )
+      .then(() => true)
+      .catch(() => false);
+    if (!changed) break;
+  }
+
+  return movements;
+}
+
+async function extractCreditCardData(page: Page, debugLog: string[], doSaveHtml: (page: Page, name: string) => Promise<void>): Promise<{ movements: BankMovement[]; creditCards: CreditCardBalance[] }> {
   debugLog.push("8. Extracting credit card data...");
   const movements: BankMovement[] = [];
   const creditCards: CreditCardBalance[] = [];
 
   await gotoPortal(page, `${PORTAL_BASE}/tarjeta-credito/resumen/deuda`);
   await delay(3000);
+  await doSaveHtml(page, "08-tc-deuda");
 
   const tcInfo = await page.evaluate(() => {
     const text = document.body?.innerText || "";
@@ -222,19 +377,7 @@ async function extractCreditCardData(page: Page, debugLog: string[]): Promise<{ 
     const intSection = text.match(/Internacional[\s\S]*?(?=Ofertas|Movimientos|Emergencias|$)/)?.[0] || "";
     const intUsdValues = [...intSection.matchAll(/USD\$?\s*(-?[\d.,]+)/g)].map(m => m[1]);
     const proxFactMatch = text.match(/Próxima facturación\s*(\d{2}\/\d{2}\/\d{4})/);
-    const noFacturados: Array<{ date: string; desc: string; amount: string }> = [];
-    const tables = document.querySelectorAll("table");
-    for (const table of tables) {
-      const prevText = (table.previousElementSibling as HTMLElement)?.innerText?.toLowerCase() || "";
-      if (prevText.includes("no facturad")) {
-        const rows = table.querySelectorAll("tbody tr");
-        for (const row of rows) {
-          const cells = Array.from(row.querySelectorAll("td"));
-          if (cells.length >= 3) noFacturados.push({ date: cells[0].innerText?.trim() || "", desc: cells[1].innerText?.trim() || "", amount: cells[cells.length - 1].innerText?.trim() || "" });
-        }
-      }
-    }
-    return { label, nacDisponible: nacDisponible?.[1], nacUtilizado: nacUtilizado?.[1], intDisponible: intUsdValues[2] || null, intUtilizado: intUsdValues[1] || null, intTotal: intUsdValues[0] || null, proxFact: proxFactMatch?.[1], noFacturados };
+    return { label, nacDisponible: nacDisponible?.[1], nacUtilizado: nacUtilizado?.[1], intDisponible: intUsdValues[2] || null, intUtilizado: intUsdValues[1] || null, intTotal: intUsdValues[0] || null, proxFact: proxFactMatch?.[1] };
   });
 
   if (tcInfo.label) {
@@ -247,37 +390,38 @@ async function extractCreditCardData(page: Page, debugLog: string[]): Promise<{ 
     }
     if (tcInfo.proxFact) card.nextBillingDate = normalizeDate(tcInfo.proxFact);
     creditCards.push(card);
-
-    for (const m of tcInfo.noFacturados) {
-      const amount = parseChileanAmount(m.amount);
-      if (amount === 0) continue;
-      movements.push({ date: normalizeDate(m.date), description: m.desc, amount: -amount, balance: 0, source: MOVEMENT_SOURCE.credit_card_unbilled });
-    }
-    debugLog.push(`  No-facturados: ${tcInfo.noFacturados.length}`);
   }
+
+  const unbilled = await extractUnbilledMovements(page, debugLog, doSaveHtml);
+  movements.push(...unbilled);
+  debugLog.push(`  No-facturados: ${unbilled.length}`);
 
   // Facturados
   await gotoPortal(page, `${PORTAL_BASE}/tarjeta-credito/resumen/cuenta-nacional`);
   await delay(3000);
+  await doSaveHtml(page, "08-tc-cuenta-nacional");
 
   const facturados = await page.evaluate(() => {
-    const results: Array<{ date: string; desc: string; amount: string; cuota: string }> = [];
-    const rows = document.querySelectorAll("table tbody tr");
+    const results: Array<{ date: string; desc: string; total: string; cuota: string; valorCuota: string }> = [];
+    const table = document.querySelector('table[name="operacion_Table"]');
+    const rows = table ? table.querySelectorAll("tbody tr") : [];
     for (const row of rows) {
       const cells = Array.from(row.querySelectorAll("td"));
-      if (cells.length < 7) continue;
+      if (cells.length < 8) continue;
       const dateText = cells[1]?.innerText?.trim() || "";
       if (!/^\d{2}\/\d{2}\/\d{4}$/.test(dateText)) continue;
-      results.push({ date: dateText, desc: cells[3]?.innerText?.trim() || "", amount: cells[4]?.innerText?.trim() || "", cuota: cells[6]?.innerText?.trim() || "" });
+      results.push({
+        date: dateText,
+        desc: cells[3]?.innerText?.trim() || "",
+        total: cells[5]?.innerText?.trim() || "",
+        cuota: cells[6]?.innerText?.trim() || "",
+        valorCuota: cells[7]?.innerText?.trim() || "",
+      });
     }
     return results;
   });
 
-  for (const m of facturados) {
-    const amount = parseChileanAmount(m.amount);
-    if (amount === 0) continue;
-    movements.push({ date: normalizeDate(m.date), description: m.desc, amount: amount > 0 ? -amount : Math.abs(amount), balance: 0, source: MOVEMENT_SOURCE.credit_card_billed, installments: normalizeInstallments(m.cuota) });
-  }
+  movements.push(...normalizeItauBilledRows(facturados));
   debugLog.push(`  Facturados: ${facturados.length}`);
 
   return { movements, creditCards };
@@ -288,12 +432,12 @@ async function extractCreditCardData(page: Page, debugLog: string[]): Promise<{ 
 async function scrapeItau(session: BrowserSession, options: ScraperOptions): Promise<ScrapeResult> {
   const { rut, password, saveScreenshots: doScreenshots } = options;
   const { onProgress } = options;
-  const { page, debugLog, screenshot: doSave } = session;
+  const { page, debugLog, screenshot: doSave, saveHtml: doSaveHtml } = session;
   const bank = "itau";
   const progress = onProgress || (() => {});
 
   progress("Abriendo sitio del banco...");
-  const loginResult = await itauLogin(page, rut, password, debugLog, doSave);
+  const loginResult = await itauLogin(page, rut, password, debugLog, doSave, doSaveHtml);
   if (!loginResult.success) {
     return { success: false, bank, accounts: [], error: loginResult.error, screenshot: loginResult.screenshot, debug: debugLog.join("\n") };
   }
@@ -302,14 +446,14 @@ async function scrapeItau(session: BrowserSession, options: ScraperOptions): Pro
   await closePopups(page);
 
   progress("Extrayendo saldo...");
-  const balance = await extractBalance(page, debugLog);
+  const balance = await extractBalance(page, debugLog, doSaveHtml);
 
   progress("Extrayendo movimientos de cuenta...");
-  const accountMovements = await extractMovements(page, debugLog);
+  const accountMovements = await extractMovements(page, debugLog, doSaveHtml);
   progress(`Cuenta: ${accountMovements.length} movimientos`);
 
   progress("Extrayendo datos de tarjeta de crédito...");
-  const tcResult = await extractCreditCardData(page, debugLog);
+  const tcResult = await extractCreditCardData(page, debugLog, doSaveHtml);
 
   // extractCreditCardData returns card movements in a separate array. Attach them
   // to their card, otherwise consumers never receive them (bort reads

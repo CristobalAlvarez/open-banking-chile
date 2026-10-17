@@ -159,7 +159,7 @@ npx open-banking-chile --bank falabella --screenshots --pretty
 | `--list`            | Listar bancos disponibles                                       |
 | `--pretty`          | JSON formateado                                                 |
 | `--movements`       | Solo array de movimientos                                       |
-| `--screenshots`     | Guardar screenshots locales en `./screenshots/`                 |
+| `--screenshots`     | Guardar screenshots en `./screenshots/` y HTML de debug en `./debug/` |
 | `--headful`         | Chrome visible (debugging). **BancoEstado e Itaú siempre usan headful** |
 | `--owner <T\|A\|B>` | Filtro Titular/Adicional para TC (default: B = todos)           |
 
@@ -275,7 +275,7 @@ Campos opcionales en `BankMovement`:
 | `owner`        | `"titular"` o `"adicional"` (Falabella CMR)                                 |
 | `card`         | Máscara de la tarjeta, ej: `"****8335"` (BChile, Falabella)                 |
 | `installments` | Cuotas en formato `NN/NN`, ej: `"02/06"` = cuota 2 de 6                     |
-| `totalAmount`  | Monto total de la compra cuando es en cuotas (Falabella)                    |
+| `totalAmount`  | Monto total de la compra cuando es en cuotas (Falabella, Itaú)              |
 
 ## Seguridad
 
@@ -394,6 +394,12 @@ Itaú corre detrás de Imperva (reese84). El login sigue usando `#loginNameID` /
 
 - **headless**: cualquier sesión headless queda bloqueada (probado con `puppeteer-core` y `rebrowser-puppeteer-core`). El scraper fuerza headful; en Linux requiere Xvfb (`DISPLAY=:99`).
 - **User-Agent falso**: `DEFAULT_UA` está fijo en `Chrome/131` y no calza con el Chrome instalado, lo que delata la automatización. Itaú usa `skipUserAgentOverride` para conservar el UA real.
+
+### Itaú: movimientos de tarjeta de crédito
+
+- **No facturados** (`credit_card_unbilled`): se extraen de la página de deuda con la paginación completa (widget Dojo). Las compras en cuotas traen `installments` tal como las muestra el banco (ej. `"00/12"`).
+- **Facturados** (`credit_card_billed`): el `amount` es el **valor cuota** (lo que se carga al período), no el monto original de la compra. Para compras en cuotas, `totalAmount` lleva el monto total de la operación ("Monto total a pagar").
+- La sección **internacional** (montos en USD) no se lista como movimientos; solo se reporta su cupo en `creditCards[].international`.
 
 ### BancoEstado y modo headless
 
