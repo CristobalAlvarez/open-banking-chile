@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { MOVEMENT_SOURCE } from "../types.js";
-import { normalizeItauBilledRows, normalizeItauUnbilledRows } from "./itau.js";
+import { normalizeItauBilledRows, normalizeItauCreditCardRows } from "./itau.js";
 
 // ─── normalizeItauBilledRows ─────────────────────────────────────
 
@@ -48,13 +48,16 @@ describe("normalizeItauBilledRows", () => {
   });
 });
 
-// ─── normalizeItauUnbilledRows ───────────────────────────────────
+// ─── normalizeItauCreditCardRows ─────────────────────────────────
 
-describe("normalizeItauUnbilledRows", () => {
+describe("normalizeItauCreditCardRows", () => {
+  const unbilled = { source: MOVEMENT_SOURCE.credit_card_unbilled } as const;
+
   it("keeps pending installment purchases (00/N) as charges with installments", () => {
-    const [m] = normalizeItauUnbilledRows([
-      { date: "09/10/2026", desc: "MERPAGOMERCADOPAGO 00-12 CUOTA", amount: "$ 799.980", isCredit: false, installments: "00/12" },
-    ]);
+    const [m] = normalizeItauCreditCardRows(
+      [{ date: "09/10/2026", desc: "MERPAGOMERCADOPAGO 00-12 CUOTA", amount: "$ 799.980", isCredit: false, installments: "00/12" }],
+      unbilled,
+    );
     expect(m.amount).toBe(-799980);
     expect(m.installments).toBe("00/12");
     expect(m.date).toBe("09-10-2026");
@@ -62,24 +65,51 @@ describe("normalizeItauUnbilledRows", () => {
   });
 
   it("maps credits to positive amounts", () => {
-    const [m] = normalizeItauUnbilledRows([
-      { date: "16/10/2026", desc: "Abono canje compra tc", amount: "$ 5.405", isCredit: true, installments: "" },
-    ]);
+    const [m] = normalizeItauCreditCardRows(
+      [{ date: "16/10/2026", desc: "Abono canje compra tc", amount: "$ 5.405", isCredit: true, installments: "" }],
+      unbilled,
+    );
     expect(m.amount).toBe(5405);
   });
 
+  it("treats negative amounts as credits even without the abono class", () => {
+    const [m] = normalizeItauCreditCardRows(
+      [{ date: "26/08/2026", desc: "Monto Cancelado 6010", amount: "-44,77", isCredit: false }],
+      { source: MOVEMENT_SOURCE.credit_card_billed, currency: "USD" },
+    );
+    expect(m.amount).toBe(44.77);
+    expect(m.currency).toBe("USD");
+  });
+
+  it("keeps USD amounts with decimals and sets currency for international rows", () => {
+    const [m] = normalizeItauCreditCardRows(
+      [{ date: "17/10/2026", desc: "PLAYSTATION COMPRAS INTMA", amount: "USD 47,61", isCredit: false, installments: "" }],
+      { source: MOVEMENT_SOURCE.credit_card_unbilled, currency: "USD" },
+    );
+    expect(m.amount).toBe(-47.61);
+    expect(m.currency).toBe("USD");
+    expect(m.source).toBe(MOVEMENT_SOURCE.credit_card_unbilled);
+  });
+
+  it("does not set currency for CLP rows", () => {
+    const [m] = normalizeItauCreditCardRows(
+      [{ date: "05/10/2026", desc: "MP BELENUS", amount: "$ 27.990", isCredit: false, installments: "1/1" }],
+      unbilled,
+    );
+    expect(m.currency).toBeUndefined();
+  });
+
   it("normalizes single-payment cuotas notation", () => {
-    const [m] = normalizeItauUnbilledRows([
-      { date: "05/10/2026", desc: "MP BELENUS", amount: "$ 27.990", isCredit: false, installments: "1/1" },
-    ]);
+    const [m] = normalizeItauCreditCardRows(
+      [{ date: "05/10/2026", desc: "MP BELENUS", amount: "$ 27.990", isCredit: false, installments: "1/1" }],
+      unbilled,
+    );
     expect(m.installments).toBe("01/01");
   });
 
   it("skips rows without an amount", () => {
     expect(
-      normalizeItauUnbilledRows([
-        { date: "05/10/2026", desc: "sin monto", amount: "", isCredit: false, installments: "" },
-      ]),
+      normalizeItauCreditCardRows([{ date: "05/10/2026", desc: "sin monto", amount: "", isCredit: false, installments: "" }], unbilled),
     ).toEqual([]);
   });
 });

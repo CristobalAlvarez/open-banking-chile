@@ -51,6 +51,12 @@ export async function extractRawMovements(
         descriptionIndex = headerTexts.findIndex(
           (h) => h.includes("descrip") || h.includes("detalle") || h.includes("glosa"),
         );
+        if (descriptionIndex < 0) {
+          // Fallback para tablas cuyo encabezado de descripción no es "Descripción/Detalle/Glosa"
+          // (ej. Itaú: "Movimientos"). Se evalúa después para no alterar el índice elegido
+          // en tablas que sí traen las variantes tradicionales.
+          descriptionIndex = headerTexts.findIndex((h) => h.includes("movimiento"));
+        }
         cargoIndex = headerTexts.findIndex(
           (h) => h.includes("cargo") || h.includes("débito") || h.includes("debito"),
         );

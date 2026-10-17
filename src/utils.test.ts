@@ -1,7 +1,27 @@
 import { describe, it, expect, vi } from "vitest";
-import { DebugLog, deduplicateMovements } from "./utils.js";
+import { DebugLog, deduplicateMovements, parseUsdAmount } from "./utils.js";
 import { MOVEMENT_SOURCE } from "./types.js";
 import type { BankMovement } from "./types.js";
+
+// ─── parseUsdAmount ──────────────────────────────────────────────
+
+describe("parseUsdAmount", () => {
+  it("parses a USD amount with decimal comma", () => {
+    expect(parseUsdAmount("USD 47,61")).toBe(47.61);
+  });
+
+  it("parses thousands separator and decimals", () => {
+    expect(parseUsdAmount("USD 1.234,56")).toBe(1234.56);
+  });
+
+  it("parses negative amounts", () => {
+    expect(parseUsdAmount("USD -34,36")).toBe(-34.36);
+  });
+
+  it("returns 0 for empty input", () => {
+    expect(parseUsdAmount("")).toBe(0);
+  });
+});
 
 // ─── DebugLog ────────────────────────────────────────────────────
 

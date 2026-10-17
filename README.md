@@ -276,6 +276,7 @@ Campos opcionales en `BankMovement`:
 | `card`         | Máscara de la tarjeta, ej: `"****8335"` (BChile, Falabella)                 |
 | `installments` | Cuotas en formato `NN/NN`, ej: `"02/06"` = cuota 2 de 6                     |
 | `totalAmount`  | Monto total de la compra cuando es en cuotas (Falabella, Itaú)              |
+| `currency`     | `"USD"` para movimientos de la sección internacional (Itaú); ausente = CLP  |
 
 ## Seguridad
 
@@ -302,7 +303,7 @@ src/
     login.ts                  — Login genérico (RUT, password, submit, detección de errores)
     navigation.ts             — Navegación DOM (click por texto, sidebars, banners)
     extraction.ts             — Extracción de movimientos desde tablas HTML
-    pagination.ts             — Iteración multi-página (Siguiente, Ver más)
+    pagination.ts             — Iteración multi-página (texto o selector, espera AJAX)
     credit-card.ts            — Extracción de movimientos de tarjeta de crédito
     balance.ts                — Extracción de saldo
     two-factor.ts             — Detección y espera de 2FA
@@ -334,6 +335,7 @@ Funciones comunes usadas por scrapers y acciones:
 | Función                                         | Descripción                                                            |
 | ----------------------------------------------- | ---------------------------------------------------------------------- |
 | `parseChileanAmount(text)`                      | Parsea montos en formato chileno ($1.234.567) a número                 |
+| `parseUsdAmount(text)`                          | Parsea montos en dólares con decimales ("USD 1.234,56" → 1234.56)      |
 | `normalizeDate(raw)`                            | Normaliza fechas a DD-MM-YYYY (soporta dd/mm/yyyy, "9 mar 2026", etc.) |
 | `normalizeOwner(raw)`                           | Normaliza owner a `"titular"` o `"adicional"`                          |
 | `normalizeInstallments(raw)`                    | Normaliza cuotas a formato NN/NN (ej: "1/3" → "01/03")                 |
@@ -344,6 +346,7 @@ Funciones comunes usadas por scrapers y acciones:
 | `closePopups(page)`                             | Cierra popups y modales genéricos                                      |
 | `delay(ms)`                                     | Espera N milisegundos                                                  |
 | `saveScreenshot(page, name, enabled, debugLog)` | Guarda screenshot si está habilitado                                   |
+| `saveHtml(page, name, enabled, debugLog)`       | Guarda el HTML de la página en `debug/` si está habilitado             |
 
 ## Contribuir
 
@@ -399,7 +402,7 @@ Itaú corre detrás de Imperva (reese84). El login sigue usando `#loginNameID` /
 
 - **No facturados** (`credit_card_unbilled`): se extraen de la página de deuda con la paginación completa (widget Dojo). Las compras en cuotas traen `installments` tal como las muestra el banco (ej. `"00/12"`).
 - **Facturados** (`credit_card_billed`): el `amount` es el **valor cuota** (lo que se carga al período), no el monto original de la compra. Para compras en cuotas, `totalAmount` lleva el monto total de la operación ("Monto total a pagar").
-- La sección **internacional** (montos en USD) no se lista como movimientos; solo se reporta su cupo en `creditCards[].international`.
+- **Internacional** (USD): sus movimientos —facturados (estado de cuenta internacional) y no facturados— se reportan con `currency: "USD"` y montos en dólares; el cupo queda en `creditCards[].international`.
 
 ### BancoEstado y modo headless
 

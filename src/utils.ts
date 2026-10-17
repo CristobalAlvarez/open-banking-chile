@@ -148,6 +148,19 @@ export function parseChileanAmount(text: string): number {
   return isNegative ? -amount : amount;
 }
 
+/**
+ * Parsea un monto en dólares a número con decimales.
+ * Maneja: "USD 47,61", "USD 1.234,56", "USD -34,36".
+ */
+export function parseUsdAmount(text: string): number {
+  const clean = text.replace(/[^0-9.,-]/g, "");
+  if (!clean) return 0;
+  const isNegative = clean.startsWith("-") || text.includes("-USD");
+  const normalized = clean.replace(/-/g, "").replace(/\./g, "").replace(",", ".");
+  const amount = parseFloat(normalized) || 0;
+  return isNegative ? -amount : amount;
+}
+
 // ─── Dates ────────────────────────────────────────────────────
 
 /**

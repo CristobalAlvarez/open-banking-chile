@@ -1,10 +1,12 @@
 import type { Page } from "puppeteer-core";
-import type { AccountBalance, BankMovement, BankScraper, CreditCardBalance, ScrapeResult, ScraperOptions } from "../types.js";
+import type { AccountBalance, BankMovement, BankScraper, CreditCardBalance, MovementSource, ScrapeResult, ScraperOptions } from "../types.js";
 import { MOVEMENT_SOURCE } from "../types.js";
-import { closePopups, delay, formatRut, parseChileanAmount, normalizeDate, deduplicateMovements, normalizeInstallments } from "../utils.js";
+import { closePopups, delay, formatRut, parseChileanAmount, parseUsdAmount, normalizeDate, normalizeInstallments } from "../utils.js";
 import { runScraper } from "../infrastructure/scraper-runner.js";
 import type { BrowserSession } from "../infrastructure/browser.js";
 import { detect2FA, waitFor2FA } from "../actions/two-factor.js";
+import { extractAccountMovements } from "../actions/extraction.js";
+import { paginateAndExtract } from "../actions/pagination.js";
 
 // ─── Itaú-specific constants ─────────────────────────────────────
 
@@ -57,6 +59,22 @@ async function gotoPortal(page: Page, url: string): Promise<void> {
     await page.goto(url, { waitUntil: "networkidle2", timeout: 45000 });
   } catch {
     /* page still loads; callers wait for the rendered content */
+  }
+}
+
+/**
+ * Espera a que el portal inserte el fragmento AJAX que contiene una tabla.
+ *
+ * Los portlets WebSphere llegan después de `gotoPortal` (Dojo los pide al
+ * cargar); sin esta espera la extracción puede ver la página sin tablas y
+ * reportar 0 movimientos. Si el selector no aparece dentro del timeout se
+ * continúa igual: la extracción reportará 0 y quedará en el debug log.
+ */
+async function waitForPortalSelector(page: Page, selector: string, timeoutMs = 20000): Promise<void> {
+  try {
+    await page.waitForSelector(selector, { timeout: timeoutMs });
+  } catch {
+    /* extracción reportará 0 */
   }
 }
 
@@ -167,46 +185,15 @@ async function extractBalance(page: Page, debugLog: string[], doSaveHtml: (page:
 async function extractMovements(page: Page, debugLog: string[], doSaveHtml: (page: Page, name: string) => Promise<void>): Promise<BankMovement[]> {
   debugLog.push("7. Extracting movements...");
   await gotoPortal(page, `${PORTAL_BASE}/cuentas/cuenta-corriente/saldos-ultimo-movimiento`);
-  await delay(3000);
+  await waitForPortalSelector(page, '[id$="consultaSaldorecord_table"]');
 
-  const allMovements: BankMovement[] = [];
-
-  for (let pageNum = 1; pageNum <= 10; pageNum++) {
-    await doSaveHtml(page, `07-movements-p${pageNum}`);
-    const pageMovements = await page.evaluate(() => {
-      const results: Array<{ date: string; description: string; cargo: string; abono: string; saldo: string }> = [];
-      const rows = document.querySelectorAll("table tbody tr");
-      for (const row of rows) {
-        const cells = Array.from(row.querySelectorAll("td"));
-        if (cells.length !== 6) continue;
-        const date = cells[0].innerText?.trim() || "";
-        if (!/^\d{2}\/\d{2}\/\d{4}$/.test(date)) continue;
-        results.push({ date, description: cells[1].innerText?.trim() || "", cargo: cells[2].innerText?.trim() || "", abono: cells[3].innerText?.trim() || "", saldo: cells[4].innerText?.trim() || "" });
-      }
-      return results;
-    });
-
-    for (const m of pageMovements) {
-      const cargoVal = parseChileanAmount(m.cargo);
-      const abonoVal = parseChileanAmount(m.abono);
-      const amount = abonoVal > 0 ? abonoVal : -cargoVal;
-      if (amount === 0) continue;
-      allMovements.push({ date: normalizeDate(m.date), description: m.description, amount, balance: parseChileanAmount(m.saldo), source: MOVEMENT_SOURCE.account });
-    }
-    debugLog.push(`  Page ${pageNum}: ${pageMovements.length} movements`);
-
-    const hasNext = await page.evaluate(() => {
-      const pageInfo = document.body?.innerText?.match(/Página (\d+) de (\d+)/);
-      if (pageInfo && parseInt(pageInfo[1], 10) >= parseInt(pageInfo[2], 10)) return false;
-      const nextBtn = document.querySelector('a[name="nextbtn"]') as HTMLElement | null;
-      if (nextBtn) { nextBtn.click(); return true; }
-      return false;
-    });
-    if (!hasNext) break;
-    await delay(3000);
-  }
-
-  return allMovements;
+  // Tabla WebSphere: Fecha | Movimientos | Cargos | Abonos | Saldos | Documentos,
+  // paginada con el widget Dojo (a[name="nextbtn"]) que re-renderiza la tabla.
+  return paginateAndExtract(page, extractAccountMovements, debugLog, {
+    nextSelector: 'a[name="nextbtn"]',
+    waitForRefreshSelector: '[name="fechaVAlISO"]',
+    onPage: (p, pageNumber) => doSaveHtml(p, `07-movements-p${pageNumber}`),
+  });
 }
 
 // ─── Itaú TC: movimientos no facturados ──────────────────────────
@@ -214,8 +201,9 @@ async function extractMovements(page: Page, debugLog: string[], doSaveHtml: (pag
 // La página de deuda renderiza dos tablas de movimientos no facturados con
 // `name=` estables por celda (WebSphere/Dojo): la nacional (CLP, con columna
 // de cuotas) y la internacional (USD, sin cuotas). La nacional se detecta por
-// `MOLS_NUM_CUOTA`, que solo existe en ella. Ambas están paginadas por un
-// widget Dojo que re-renderiza la tabla al clickear `a[name="nextbtn"]`.
+// `MOLS_NUM_CUOTA`, que solo existe en ella. La nacional se pagina con el
+// widget Dojo (a[name="nextbtn"], AJAX sobre la tabla); la internacional no
+// tiene paginación propia.
 
 const UNBILLED_CELLS = {
   date: "FECHA_TRANSACCION_iso8601",
@@ -225,14 +213,49 @@ const UNBILLED_CELLS = {
   amount: "MONTO_TRANSACCION_",
 } as const;
 
-const MAX_UNBILLED_PAGES = 20;
+// Tabla del estado de cuenta internacional (cuenta-internacional): montos en USD,
+// sin columna de cuotas.
+const INTL_CELLS = {
+  date: "Fecha_iso8601",
+  desc: "DetalleTransaccion",
+  amount: "MontoDolar_iso8601",
+} as const;
 
-export interface ItauUnbilledRow {
+export interface ItauCreditCardRow {
   date: string;
   desc: string;
   amount: string;
   isCredit: boolean;
-  installments: string;
+  installments?: string;
+}
+
+/**
+ * Convierte filas simples de TC a movimientos: no facturados nacionales (CLP)
+ * e internacionales (USD), y facturados internacionales (USD).
+ *
+ * El signo sale del monto (negativo = abono) o de la clase de la celda
+ * (`cargos`/`abono`). `currency` solo se agrega cuando no es CLP.
+ */
+export function normalizeItauCreditCardRows(
+  rows: ItauCreditCardRow[],
+  opts: { source: MovementSource; currency?: "CLP" | "USD" },
+): BankMovement[] {
+  const currency = opts.currency ?? "CLP";
+  const movements: BankMovement[] = [];
+  for (const m of rows) {
+    const parsed = currency === "USD" ? parseUsdAmount(m.amount) : parseChileanAmount(m.amount);
+    if (parsed === 0) continue;
+    movements.push({
+      date: normalizeDate(m.date),
+      description: m.desc,
+      amount: parsed < 0 || m.isCredit ? Math.abs(parsed) : -Math.abs(parsed),
+      balance: 0,
+      source: opts.source,
+      installments: normalizeInstallments(m.installments),
+      ...(currency === "USD" ? { currency: "USD" as const } : {}),
+    });
+  }
+  return movements;
 }
 
 export interface ItauBilledRow {
@@ -241,24 +264,6 @@ export interface ItauBilledRow {
   total: string;
   cuota: string;
   valorCuota: string;
-}
-
-/** Convierte filas crudas de la tabla de no facturados (CLP) a movimientos. */
-export function normalizeItauUnbilledRows(rows: ItauUnbilledRow[]): BankMovement[] {
-  const movements: BankMovement[] = [];
-  for (const m of rows) {
-    const parsed = parseChileanAmount(m.amount);
-    if (parsed === 0) continue;
-    movements.push({
-      date: normalizeDate(m.date),
-      description: m.desc,
-      amount: m.isCredit ? Math.abs(parsed) : -Math.abs(parsed),
-      balance: 0,
-      source: MOVEMENT_SOURCE.credit_card_unbilled,
-      installments: normalizeInstallments(m.installments),
-    });
-  }
-  return movements;
 }
 
 /**
@@ -288,74 +293,45 @@ export function normalizeItauBilledRows(rows: ItauBilledRow[]): BankMovement[] {
   return movements;
 }
 
-async function extractUnbilledMovements(
-  page: Page,
-  debugLog: string[],
-  doSaveHtml: (page: Page, name: string) => Promise<void>,
-): Promise<BankMovement[]> {
-  const movements: BankMovement[] = [];
-
-  for (let pageNum = 1; pageNum <= MAX_UNBILLED_PAGES; pageNum++) {
-    const rows = await page.evaluate((cells) => {
-      // La tabla nacional puede venir envuelta por tablas de layout; elegir la más
-      // interna (la que "posee" sus celdas) evita duplicar la primera fila y evita
-      // mezclar la tabla internacional (USD, sin columna de cuotas).
-      const table = Array.from(document.querySelectorAll("table")).find((t) =>
-        Array.from(t.querySelectorAll(`[name="${cells.installments}"]`)).some((el) => el.closest("table") === t),
-      );
-      const results: Array<{ date: string; desc: string; amount: string; isCredit: boolean; installments: string }> = [];
-      if (!table) return results;
-      for (const row of table.querySelectorAll("tr")) {
-        const dateEl = row.querySelector(`[name="${cells.date}"]`) as HTMLElement | null;
-        const postDateEl = row.querySelector(`[name="${cells.postDate}"]`) as HTMLElement | null;
-        const descEl = row.querySelector(`[name="${cells.desc}"]`) as HTMLElement | null;
-        const amountEl = row.querySelector(`[name="${cells.amount}"]`) as HTMLElement | null;
-        const installmentsEl = row.querySelector(`[name="${cells.installments}"]`) as HTMLElement | null;
-        const date = ((dateEl || postDateEl)?.innerText || "").trim();
-        if (!/^\d{2}\/\d{2}\/\d{4}$/.test(date) || !descEl || !amountEl) continue;
-        results.push({
-          date,
-          desc: (descEl.innerText || "").trim(),
-          amount: (amountEl.innerText || "").trim(),
-          isCredit: amountEl.className.includes("abono"),
-          installments: (installmentsEl?.innerText || "").trim(),
-        });
-      }
-      return results;
-    }, UNBILLED_CELLS);
-
-    movements.push(...normalizeItauUnbilledRows(rows));
-    debugLog.push(`  No-facturados p${pageNum}: ${rows.length}`);
-    await doSaveHtml(page, `08-tc-deuda-p${pageNum}`);
-
-    const first = rows[0];
-    if (!first) break;
-    const canNext = await page.evaluate(() => !!document.querySelector('a[name="nextbtn"]'));
-    if (!canNext) break;
-    await page.evaluate(() => {
-      (document.querySelector('a[name="nextbtn"]') as HTMLElement | null)?.click();
+async function extractUnbilledRows(page: Page, kind: "national" | "international"): Promise<BankMovement[]> {
+  const rows = await page.evaluate((cells, tableKind) => {
+    // La tabla puede venir envuelta por tablas de layout: elegir la más interna
+    // (la que "posee" sus celdas) evita duplicar la primera fila. La nacional es
+    // la única con columna de cuotas; la internacional trae montos en USD.
+    const table = Array.from(document.querySelectorAll("table")).find((t) => {
+      const amountCells = Array.from(t.querySelectorAll(`[name="${cells.amount}"]`));
+      if (!amountCells.some((el) => el.closest("table") === t)) return false;
+      const installmentCells = Array.from(t.querySelectorAll(`[name="${cells.installments}"]`));
+      const ownsInstallments = installmentCells.some((el) => el.closest("table") === t);
+      return tableKind === "national" ? ownsInstallments : !ownsInstallments;
     });
-    // El widget Dojo re-renderiza la tabla vía AJAX: esperar a que cambie la primera fila.
-    const changed = await page
-      .waitForFunction(
-        (prev, cells) => {
-          const el = document.querySelector(`[name="${cells.date}"]`) as HTMLElement | null;
-          const row = el?.closest("tr");
-          if (!el || !row) return false;
-          const date = el.innerText?.trim() || "";
-          const desc = (row.querySelector(`[name="${cells.desc}"]`) as HTMLElement | null)?.innerText?.trim() || "";
-          return `${date}|${desc}` !== prev;
-        },
-        { timeout: 15000 },
-        `${first.date}|${first.desc}`,
-        UNBILLED_CELLS,
-      )
-      .then(() => true)
-      .catch(() => false);
-    if (!changed) break;
-  }
+    const results: Array<{ date: string; desc: string; amount: string; isCredit: boolean; installments: string }> = [];
+    if (!table) return results;
+    for (const row of table.querySelectorAll("tr")) {
+      const dateEl = row.querySelector(`[name="${cells.date}"]`) as HTMLElement | null;
+      const postDateEl = row.querySelector(`[name="${cells.postDate}"]`) as HTMLElement | null;
+      const descEl = row.querySelector(`[name="${cells.desc}"]`) as HTMLElement | null;
+      const amountEl = row.querySelector(`[name="${cells.amount}"]`) as HTMLElement | null;
+      const installmentsEl = row.querySelector(`[name="${cells.installments}"]`) as HTMLElement | null;
+      const date = ((dateEl || postDateEl)?.innerText || "").trim();
+      const amount = (amountEl?.innerText || "").trim();
+      if (!/^\d{2}\/\d{2}\/\d{4}$/.test(date) || !descEl || !amountEl) continue;
+      if (tableKind === "international" && !/^USD/i.test(amount)) continue;
+      results.push({
+        date,
+        desc: (descEl.innerText || "").trim(),
+        amount,
+        isCredit: amountEl.className.includes("abono"),
+        installments: (installmentsEl?.innerText || "").trim(),
+      });
+    }
+    return results;
+  }, UNBILLED_CELLS, kind);
 
-  return movements;
+  return normalizeItauCreditCardRows(rows, {
+    source: MOVEMENT_SOURCE.credit_card_unbilled,
+    currency: kind === "international" ? "USD" : "CLP",
+  });
 }
 
 async function extractCreditCardData(page: Page, debugLog: string[], doSaveHtml: (page: Page, name: string) => Promise<void>): Promise<{ movements: BankMovement[]; creditCards: CreditCardBalance[] }> {
@@ -364,7 +340,7 @@ async function extractCreditCardData(page: Page, debugLog: string[], doSaveHtml:
   const creditCards: CreditCardBalance[] = [];
 
   await gotoPortal(page, `${PORTAL_BASE}/tarjeta-credito/resumen/deuda`);
-  await delay(3000);
+  await waitForPortalSelector(page, '[id$="nacionalesrecord_table"], [id$="internacionalesrecord_table"]');
   await doSaveHtml(page, "08-tc-deuda");
 
   const tcInfo = await page.evaluate(() => {
@@ -392,13 +368,23 @@ async function extractCreditCardData(page: Page, debugLog: string[], doSaveHtml:
     creditCards.push(card);
   }
 
-  const unbilled = await extractUnbilledMovements(page, debugLog, doSaveHtml);
+  // No facturados: la internacional (USD) no se pagina; la nacional (CLP) usa
+  // el widget Dojo que re-renderiza la tabla al clickear a[name="nextbtn"].
+  const internationalUnbilled = await extractUnbilledRows(page, "international");
+  movements.push(...internationalUnbilled);
+  debugLog.push(`  No-facturados internacionales: ${internationalUnbilled.length}`);
+
+  const unbilled = await paginateAndExtract(page, (p) => extractUnbilledRows(p, "national"), debugLog, {
+    nextSelector: 'a[name="nextbtn"]',
+    waitForRefreshSelector: `[name="${UNBILLED_CELLS.date}"]`,
+    onPage: (p, pageNumber) => doSaveHtml(p, `08-tc-deuda-p${pageNumber}`),
+  });
   movements.push(...unbilled);
   debugLog.push(`  No-facturados: ${unbilled.length}`);
 
   // Facturados
   await gotoPortal(page, `${PORTAL_BASE}/tarjeta-credito/resumen/cuenta-nacional`);
-  await delay(3000);
+  await waitForPortalSelector(page, 'table[name="operacion_Table"]');
   await doSaveHtml(page, "08-tc-cuenta-nacional");
 
   const facturados = await page.evaluate(() => {
@@ -423,6 +409,34 @@ async function extractCreditCardData(page: Page, debugLog: string[], doSaveHtml:
 
   movements.push(...normalizeItauBilledRows(facturados));
   debugLog.push(`  Facturados: ${facturados.length}`);
+
+  // Facturados internacionales (USD): tabla propia del estado de cuenta internacional.
+  await gotoPortal(page, `${PORTAL_BASE}/tarjeta-credito/resumen/cuenta-internacional`);
+  await waitForPortalSelector(page, '[id$="estadoDeCuentaTarjetarecord_table"]');
+  await doSaveHtml(page, "08-tc-cuenta-internacional");
+
+  const intlBilled = await page.evaluate((cells) => {
+    const table = document.querySelector('[id$="estadoDeCuentaTarjetarecord_table"]');
+    const results: Array<{ date: string; desc: string; amount: string; isCredit: boolean }> = [];
+    if (!table) return results;
+    for (const row of table.querySelectorAll("tr")) {
+      const dateEl = row.querySelector(`[name="${cells.date}"]`) as HTMLElement | null;
+      const descEl = row.querySelector(`[name="${cells.desc}"]`) as HTMLElement | null;
+      const amountEl = row.querySelector(`[name="${cells.amount}"]`) as HTMLElement | null;
+      const date = (dateEl?.innerText || "").trim();
+      if (!/^\d{2}\/\d{2}\/\d{4}$/.test(date) || !descEl || !amountEl) continue;
+      results.push({
+        date,
+        desc: (descEl.innerText || "").trim(),
+        amount: (amountEl.innerText || "").trim(),
+        isCredit: amountEl.className.includes("abono"),
+      });
+    }
+    return results;
+  }, INTL_CELLS);
+
+  movements.push(...normalizeItauCreditCardRows(intlBilled, { source: MOVEMENT_SOURCE.credit_card_billed, currency: "USD" }));
+  debugLog.push(`  Facturados internacionales: ${intlBilled.length}`);
 
   return { movements, creditCards };
 }
@@ -465,15 +479,14 @@ async function scrapeItau(session: BrowserSession, options: ScraperOptions): Pro
     card.movements = tcResult.movements;
   }
 
-  const deduplicatedAccount = deduplicateMovements(accountMovements);
   const totalTc = card?.movements?.length ?? 0;
 
-  debugLog.push(`9. Total: ${deduplicatedAccount.length} account + ${totalTc} TC movements`);
-  progress(`Listo — ${deduplicatedAccount.length + totalTc} movimientos totales`);
+  debugLog.push(`9. Total: ${accountMovements.length} account + ${totalTc} TC movements`);
+  progress(`Listo — ${accountMovements.length + totalTc} movimientos totales`);
   await doSave(page, "05-final");
   const ss = doScreenshots ? (await page.screenshot({ encoding: "base64" })) as string : undefined;
 
-  const accounts: AccountBalance[] = [{ balance, movements: deduplicatedAccount }];
+  const accounts: AccountBalance[] = [{ balance, movements: accountMovements }];
   return { success: true, bank, accounts, creditCards: tcResult.creditCards.length > 0 ? tcResult.creditCards : undefined, screenshot: ss, debug: debugLog.join("\n") };
 }
 
