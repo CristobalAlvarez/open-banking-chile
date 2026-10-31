@@ -135,6 +135,11 @@ export interface ScraperOptions extends BankCredentials {
   onDebug?: (line: string) => void;
   /** URL del proxy SOCKS5/HTTP para las peticiones del browser (ej: "socks5://100.109.27.125:1080") */
   proxyUrl?: string;
+  /**
+   * Fecha desde la que se necesitan movimientos (dd-mm-yyyy). Los scrapers que paginan
+   * la usan para cortar cuando ya cubrieron el hueco; no filtra el resultado.
+   */
+  since?: string;
 }
 
 /** Interfaz que debe implementar cada banco */

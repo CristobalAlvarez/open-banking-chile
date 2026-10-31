@@ -27,8 +27,63 @@ interface ApiFechaFacturacion { fechaFacturacion: string; existeEstadoCuentaNaci
 interface ApiTransaccionFacturada { fechaTransaccionString: string; montoTransaccion: number; descripcion: string; cuotas: string; grupo: string; }
 interface ApiResumenNested { montoFacturado?: number; pagoMinimo?: number; fechaFacturacionActual?: string; fechaVencimientoFacturacion?: string; fechaProximaFacturacion?: string; }
 interface ApiResumenFacturado { existeEstadoCuenta: boolean; seccionOperaciones?: { transaccionesTarjetas: ApiTransaccionFacturada[] }; seccionCargosImpuestosAbonos?: { transaccionesTarjetas: ApiTransaccionFacturada[] | null }; resumen?: ApiResumenNested; totalFacturado?: number; montoTotalFacturado?: number; montoTotal?: number; fechaVencimiento?: string; fechaPago?: string; pagoMinimo?: number; montoMinimoPago?: number; montoMinimoAPagar?: number; }
-interface ApiCartolaMov { descripcion: string; monto: number; saldo: number; tipo: string; fechaContable: string; }
-type ApiCartolaResponse = { movimientos: ApiCartolaMov[]; pagina: Array<{ totalRegistros: number; masPaginas: boolean }> };
+interface ApiCartolaMov { id?: string; descripcion: string; monto: number; saldo: number; tipo: string; fechaContable: string; }
+interface ApiCartolaPageInfo {
+  totalRegistros?: number | string;
+  cantidadRegistros?: number | string;
+  indiceInicio?: number | string;
+  indiceTermino?: number | string;
+  masPaginas?: boolean | string;
+}
+type ApiCartolaResponse = { movimientos?: ApiCartolaMov[]; pagina?: ApiCartolaPageInfo[] };
+
+/** BChile manda los flags como "S"/"N" o boolean; `Boolean("N")` sería true. */
+export function parseCartolaFlag(value: unknown): boolean {
+  if (typeof value === "boolean") return value;
+  const normalized = String(value ?? "").trim().toLowerCase();
+  return ["s", "si", "sí", "y", "yes", "true", "1"].includes(normalized);
+}
+
+export function cartolaTotal(info: { totalRegistros?: number | string } | undefined): number | undefined {
+  const total = parseInt(String(info?.totalRegistros ?? "").replace(/[^0-9]/g, ""), 10);
+  return Number.isFinite(total) && total > 0 ? total : undefined;
+}
+
+/** `totalRegistros` manda sobre `masPaginas`: si faltan registros, hay que seguir paginando. */
+export function hasMoreCartola(
+  info: { totalRegistros?: number | string; masPaginas?: boolean | string } | undefined,
+  fetched: number,
+): boolean {
+  if (fetched === 0) return false;
+  const total = cartolaTotal(info);
+  if (total !== undefined && fetched < total) return true;
+  return parseCartolaFlag(info?.masPaginas);
+}
+
+/** Las fechas vienen newest-first; se piden las dos últimas para no dejar huecos de facturación. */
+export function selectStatementDates(
+  fechas: {
+    listaNacional?: Array<{ fechaFacturacion: string }>;
+    listaInternacional?: Array<{ fechaFacturacion: string }>;
+  } | undefined,
+  limit = 2,
+): string[] {
+  const dates = [
+    ...(fechas?.listaNacional ?? []),
+    ...(fechas?.listaInternacional ?? []),
+  ]
+    .map((f) => f.fechaFacturacion)
+    .filter((date): date is string => typeof date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(date));
+  return [...new Set(dates)].sort((a, b) => b.localeCompare(a)).slice(0, limit);
+}
+
+/** dd-mm-yyyy → YYYYMMDD comparable; undefined si no es una fecha del scraper. */
+function chileanDateKey(value: string | undefined): number | undefined {
+  const match = /^(\d{2})-(\d{2})-(\d{4})$/.exec(value ?? "");
+  return match ? Number(`${match[3]}${match[2]}${match[1]}`) : undefined;
+}
+
+const BCHILE_MAX_CARTOLA_PAGES = 100;
 
 // ─── API helpers ─────────────────────────────────────────────────
 
@@ -213,7 +268,7 @@ function facturadoToMovement(tx: ApiTransaccionFacturada, source: MovementSource
   return { date: normalizeDate(tx.fechaTransaccionString), description: tx.descripcion.trim(), amount: tx.grupo === "pagos" ? Math.abs(tx.montoTransaccion) : -Math.abs(tx.montoTransaccion), balance: 0, source, card: cardMask, installments: normalizeInstallments(tx.cuotas) };
 }
 
-async function fetchAccountMovements(page: Page, products: ApiProduct[], fullName: string, rut: string, debugLog: string[]): Promise<{ movements: BankMovement[]; balance?: number }> {
+export async function fetchAccountMovements(page: Page, products: ApiProduct[], fullName: string, rut: string, debugLog: string[], since?: string): Promise<{ movements: BankMovement[]; balance?: number }> {
   const accounts = products.filter(p => p.tipo === "cuenta" || p.tipo === "cuentaCorrienteMonedaLocal");
   const seenNums = new Set<string>();
   const unique = accounts.filter(a => { if (seenNums.has(a.numero)) return false; seenNums.add(a.numero); return true; });
@@ -234,20 +289,79 @@ async function fetchAccountMovements(page: Page, products: ApiProduct[], fullNam
       await apiPost(page, "movimientos/getConfigConsultaMovimientos", { cuentasSeleccionadas: [cuentaSeleccionada] });
       const cartola = await apiPost<ApiCartolaResponse>(page, "bff-pper-prd-cta-movimientos/movimientos/getCartola", { cuentaSeleccionada, cabecera: { statusGenerico: true, paginacionDesde: 1 } });
 
-      if (cartola.movimientos) {
-        for (const mov of cartola.movimientos) movements.push(cartolaMovToMovement(mov));
-        if (balance === undefined && acct.codigoMoneda === "CLP" && cartola.movimientos.length > 0) balance = cartola.movimientos[0].saldo;
+      const accountMovements: BankMovement[] = [];
+      const seen = new Set<string>();
+      const sinceKey = chileanDateKey(since);
+      let oldestKey: number | undefined;
+      let rawFetched = 0;
+      let uniqueFetched = 0;
+      let info = cartola.pagina?.[0];
 
-        let hasMore = cartola.movimientos.length > 0 && (cartola.pagina?.[0]?.masPaginas ?? false);
-        let offset = 1 + cartola.movimientos.length;
-        for (let p = 2; hasMore && p <= 25; p++) {
-          try {
-            const next = await apiPost<ApiCartolaResponse>(page, "bff-pper-prd-cta-movimientos/movimientos/getCartola", { cuentaSeleccionada, cabecera: { statusGenerico: true, paginacionDesde: offset } });
-            if (!next.movimientos?.length) break;
-            for (const mov of next.movimientos) movements.push(cartolaMovToMovement(mov));
-            offset += next.movimientos.length;
-            hasMore = next.pagina?.[0]?.masPaginas ?? false;
-          } catch { hasMore = false; }
+      const addPage = (rows: ApiCartolaMov[]): number => {
+        let added = 0;
+        for (const mov of rows) {
+          const key = mov.id ?? `${mov.fechaContable}|${mov.descripcion}|${mov.monto}|${mov.saldo}|${mov.tipo}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          const movement = cartolaMovToMovement(mov);
+          accountMovements.push(movement);
+          const dateKey = chileanDateKey(movement.date);
+          if (dateKey !== undefined) oldestKey = oldestKey === undefined ? dateKey : Math.min(oldestKey, dateKey);
+          added++;
+        }
+        rawFetched += rows.length;
+        uniqueFetched += added;
+        return added;
+      };
+
+      const firstRows = cartola.movimientos ?? [];
+      addPage(firstRows);
+      if (balance === undefined && acct.codigoMoneda === "CLP" && firstRows.length > 0) balance = firstRows[0].saldo;
+      debugLog.push(
+        `    → cartola p1: ${firstRows.length} filas, ${uniqueFetched} únicas ` +
+        `(total ${cartolaTotal(info) ?? "?"}, masPaginas=${String(info?.masPaginas)})`,
+      );
+
+      let hasMore = hasMoreCartola(info, uniqueFetched);
+      for (let p = 2; hasMore && p <= BCHILE_MAX_CARTOLA_PAGES; p++) {
+        const offset = 1 + rawFetched;
+        try {
+          const next = await apiPost<ApiCartolaResponse>(page, "bff-pper-prd-cta-movimientos/movimientos/getCartola", { cuentaSeleccionada, cabecera: { statusGenerico: true, paginacionDesde: offset } });
+          const nextRows = next.movimientos ?? [];
+          if (nextRows.length === 0) {
+            debugLog.push(`    → cartola p${p} (offset ${offset}): 0 filas; fin`);
+            break;
+          }
+          const added = addPage(nextRows);
+          info = next.pagina?.[0] ?? info;
+          debugLog.push(
+            `    → cartola p${p} (offset ${offset}): ${nextRows.length} filas, ${added} nuevas ` +
+            `(total ${cartolaTotal(info) ?? "?"}, masPaginas=${String(info?.masPaginas)})`,
+          );
+          if (added === 0) break;
+          hasMore = hasMoreCartola(info, uniqueFetched);
+        } catch (err) {
+          debugLog.push(`    → cartola p${p} (offset ${offset}): error ${err instanceof Error ? err.message : String(err)}`);
+          hasMore = false;
+        }
+      }
+
+      if (accountMovements.length > 0) {
+        movements.push(...accountMovements);
+        debugLog.push(
+          `    → cartola ${acct.mascara}: ${uniqueFetched} movimientos, ` +
+          `desde ${accountMovements[accountMovements.length - 1]?.date} hasta ${accountMovements[0]?.date}`,
+        );
+      }
+      const total = cartolaTotal(info);
+      if (total !== undefined && uniqueFetched < total) {
+        debugLog.push(`    → ADVERTENCIA: cartola truncada ${uniqueFetched}/${total}`);
+      }
+      if (sinceKey !== undefined && oldestKey !== undefined) {
+        if (oldestKey <= sinceKey) {
+          debugLog.push(`    → cartola ${acct.mascara}: cubre since ${since} (más antiguo ${accountMovements[accountMovements.length - 1]?.date})`);
+        } else {
+          debugLog.push(`    → ADVERTENCIA: cartola no alcanza since ${since}; más antiguo ${accountMovements[accountMovements.length - 1]?.date}`);
         }
       }
     } catch (err) { debugLog.push(`    → Error: ${err instanceof Error ? err.message : String(err)}`); }
@@ -306,49 +420,56 @@ async function fetchCreditCardData(page: Page, fullName: string, debugLog: strin
       const fechas = await apiPost<{ existenEstadosDeCuenta: boolean; numeroCuenta: string | null; listaNacional: ApiFechaFacturacion[]; listaInternacional: ApiFechaFacturacion[] }>(page, "tarjetas/estadocuenta/fechas-facturacion", baseBody);
       if (fechas.existenEstadosDeCuenta) {
         const ccEntry = creditCards[creditCards.length - 1];
-        const latestFecha = fechas.listaNacional?.[0]?.fechaFacturacion;
         const numeroCuenta = fechas.numeroCuenta;
-        if (latestFecha && numeroCuenta) {
-          const resumenBody = { ...baseBody, fechaFacturacion: latestFecha, numeroCuenta };
-          const [nacR, intR] = await Promise.allSettled([
-            apiPost<ApiResumenFacturado>(page, "tarjetas/estadocuenta/nacional/resumen-por-fecha", resumenBody),
-            apiPost<ApiResumenFacturado>(page, "tarjetas/estadocuenta/internacional/resumen-por-fecha", resumenBody),
-          ]);
-          for (const r of [nacR, intR]) {
-            if (r.status !== "fulfilled" || !r.value.existeEstadoCuenta) continue;
-            const res = r.value;
+        const statementDates = selectStatementDates(fechas);
+        if (numeroCuenta && statementDates.length > 0) {
+          for (let si = 0; si < statementDates.length; si++) {
+            const fechaFacturacion = statementDates[si];
+            const resumenBody = { ...baseBody, fechaFacturacion, numeroCuenta };
+            const [nacR, intR] = await Promise.allSettled([
+              apiPost<ApiResumenFacturado>(page, "tarjetas/estadocuenta/nacional/resumen-por-fecha", resumenBody),
+              apiPost<ApiResumenFacturado>(page, "tarjetas/estadocuenta/internacional/resumen-por-fecha", resumenBody),
+            ]);
+            let statementMovements = 0;
+            for (const r of [nacR, intR]) {
+              if (r.status !== "fulfilled" || !r.value.existeEstadoCuenta) continue;
+              const res = r.value;
 
-            const allTx = [
-              ...(res.seccionOperaciones?.transaccionesTarjetas ?? []),
-              ...(res.seccionCargosImpuestosAbonos?.transaccionesTarjetas ?? []),
-            ];
-            for (const tx of allTx) {
-              // Skip section-subtotal rows (e.g. "TOTAL PAGOS A LA CUENTA").
-              const desc = tx.descripcion.trim().toUpperCase();
-              if (desc.startsWith("TOTAL ") && desc.endsWith("A LA CUENTA")) continue;
-              movements.push(facturadoToMovement(tx, MOVEMENT_SOURCE.credit_card_billed, mascara));
-            }
+              const allTx = [
+                ...(res.seccionOperaciones?.transaccionesTarjetas ?? []),
+                ...(res.seccionCargosImpuestosAbonos?.transaccionesTarjetas ?? []),
+              ];
+              for (const tx of allTx) {
+                // Skip section-subtotal rows (e.g. "TOTAL PAGOS A LA CUENTA").
+                const desc = tx.descripcion.trim().toUpperCase();
+                if (desc.startsWith("TOTAL ") && desc.endsWith("A LA CUENTA")) continue;
+                movements.push(facturadoToMovement(tx, MOVEMENT_SOURCE.credit_card_billed, mascara));
+                statementMovements++;
+              }
 
-            // Override nextBillingDate/nextDueDate with accurate date-format values from resumen
-            if (res.resumen?.fechaProximaFacturacion) ccEntry.nextBillingDate = normalizeDate(res.resumen.fechaProximaFacturacion);
-            if (!ccEntry.nextDueDate && res.resumen?.fechaVencimientoFacturacion) ccEntry.nextDueDate = normalizeDate(res.resumen.fechaVencimientoFacturacion);
+              // La metadata sale solo del estado más nuevo; los anteriores solo aportan movimientos.
+              if (si > 0) continue;
+              if (res.resumen?.fechaProximaFacturacion) ccEntry.nextBillingDate = normalizeDate(res.resumen.fechaProximaFacturacion);
+              if (!ccEntry.nextDueDate && res.resumen?.fechaVencimientoFacturacion) ccEntry.nextDueDate = normalizeDate(res.resumen.fechaVencimientoFacturacion);
 
-            if (!ccEntry.lastStatement) {
-              const billedAmount = res.resumen?.montoFacturado ?? res.totalFacturado ?? res.montoTotalFacturado ?? res.montoTotal;
-              const dueDateRaw = res.resumen?.fechaVencimientoFacturacion ?? res.fechaVencimiento ?? res.fechaPago;
-              const minimumPayment = res.resumen?.pagoMinimo ?? res.pagoMinimo ?? res.montoMinimoPago ?? res.montoMinimoAPagar;
-              const billingDateRaw = res.resumen?.fechaFacturacionActual ?? latestFecha;
-              if (billedAmount && dueDateRaw) {
-                const billingDate = normalizeDate(billingDateRaw);
-                ccEntry.lastStatement = {
-                  billingDate,
-                  billedAmount,
-                  dueDate: normalizeDate(dueDateRaw),
-                  minimumPayment,
-                };
-                ccEntry.billingPeriod = monthYearLabel(billingDate);
+              if (!ccEntry.lastStatement) {
+                const billedAmount = res.resumen?.montoFacturado ?? res.totalFacturado ?? res.montoTotalFacturado ?? res.montoTotal;
+                const dueDateRaw = res.resumen?.fechaVencimientoFacturacion ?? res.fechaVencimiento ?? res.fechaPago;
+                const minimumPayment = res.resumen?.pagoMinimo ?? res.pagoMinimo ?? res.montoMinimoPago ?? res.montoMinimoAPagar;
+                const billingDateRaw = res.resumen?.fechaFacturacionActual ?? fechaFacturacion;
+                if (billedAmount && dueDateRaw) {
+                  const billingDate = normalizeDate(billingDateRaw);
+                  ccEntry.lastStatement = {
+                    billingDate,
+                    billedAmount,
+                    dueDate: normalizeDate(dueDateRaw),
+                    minimumPayment,
+                  };
+                  ccEntry.billingPeriod = monthYearLabel(billingDate);
+                }
               }
             }
+            debugLog.push(`  TC ${fechaFacturacion}: ${statementMovements} movimiento(s)`);
           }
         }
       }
@@ -361,7 +482,7 @@ async function fetchCreditCardData(page: Page, fullName: string, debugLog: strin
 // ─── Main scrape function ────────────────────────────────────────
 
 async function scrapeBchile(session: BrowserSession, options: ScraperOptions): Promise<ScrapeResult> {
-  const { rut, password, saveScreenshots: doScreenshots } = options;
+  const { rut, password, saveScreenshots: doScreenshots, since } = options;
   const { page, debugLog, screenshot: doSave } = session;
   const { onProgress } = options;
   const bank = "bchile";
@@ -417,7 +538,7 @@ async function scrapeBchile(session: BrowserSession, options: ScraperOptions): P
   // Account movements
   debugLog.push("6. Fetching account movements via API...");
   progress("Extrayendo movimientos de cuenta...");
-  const acctResult = await fetchAccountMovements(page, products.productos, fullName, products.rut, debugLog);
+  const acctResult = await fetchAccountMovements(page, products.productos, fullName, products.rut, debugLog, since);
   if (balance === undefined && acctResult.balance !== undefined) balance = acctResult.balance;
   debugLog.push(`  Account movements: ${acctResult.movements.length}`);
 
