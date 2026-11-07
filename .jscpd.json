@@ -1,0 +1,8 @@
+{
+  "$schema": "https://raw.githubusercontent.com/kucherenko/jscpd/master/packages/jscpd/schema.json",
+  "minTokens": 60,
+  "threshold": 3,
+  "reporters": ["console"],
+  "format": ["typescript"],
+  "ignore": ["**/node_modules/**", "**/dist/**", "**/*.test.ts", "**/package-lock.json"]
+}

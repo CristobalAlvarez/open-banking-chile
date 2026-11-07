@@ -1,0 +1,23 @@
+id: no-contract-type-assertions
+valid:
+  - |-
+    const m: BankMovement = { date, description, amount, balance, source };
+  - |-
+    const rows = raw
+      .map((r): BankMovement | null => parse(r))
+      .filter((m): m is BankMovement => m !== null);
+  - |-
+    const el = node as HTMLElement;
+  - |-
+    const page = ctx as unknown as FrameCtx;
+invalid:
+  - |-
+    const m = { date, description, amount, balance, source } as BankMovement;
+  - |-
+    const rows = raw.map(parse).filter(Boolean) as BankMovement[];
+  - |-
+    const acct = x as AccountBalance;
+  - |-
+    const cards = y as CreditCardBalance[];
+  - |-
+    const result = z as ScrapeResult;

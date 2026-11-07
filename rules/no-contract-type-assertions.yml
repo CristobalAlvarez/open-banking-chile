@@ -1,0 +1,22 @@
+id: no-contract-type-assertions
+language: TypeScript
+severity: error
+message: Aserción sobre un tipo del contrato público. Silencia el chequeo de tipos de lo que consume bort.
+note: |
+  `x as BankMovement` hace pasar por válido un objeto al que le puede faltar un campo o traer un
+  `null`. Tipa el retorno (`.map((m): BankMovement | null => …)`) y filtra con un predicado
+  (`.filter((m): m is BankMovement => m !== null)`).
+files:
+  - src/**/*.ts
+ignores:
+  - "**/*.test.ts"
+  - src/testing/**
+rule:
+  any:
+    - pattern: $E as BankMovement
+    - pattern: $E as BankMovement[]
+    - pattern: $E as AccountBalance
+    - pattern: $E as AccountBalance[]
+    - pattern: $E as CreditCardBalance
+    - pattern: $E as CreditCardBalance[]
+    - pattern: $E as ScrapeResult

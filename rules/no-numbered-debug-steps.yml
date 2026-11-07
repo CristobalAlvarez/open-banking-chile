@@ -1,0 +1,16 @@
+id: no-numbered-debug-steps
+language: TypeScript
+severity: error
+message: Paso numerado a mano en el debug log. Usa `debugLog.step("…")`, que numera solo.
+note: |
+  `debugLog.push("3. …")` se desincroniza en cuanto se agrega o quita un paso.
+  Las líneas de detalle sin número (`debugLog.push("  → …")`) siguen siendo válidas.
+files:
+  - src/**/*.ts
+ignores:
+  - "**/*.test.ts"
+rule:
+  pattern: debugLog.push($MSG)
+constraints:
+  MSG:
+    regex: "^[\"'`]\\d+[.)]"

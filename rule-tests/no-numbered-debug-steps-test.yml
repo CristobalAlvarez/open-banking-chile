@@ -1,0 +1,17 @@
+id: no-numbered-debug-steps
+valid:
+  - |-
+    debugLog.step("Navegando al login");
+  - |-
+    debugLog.push("  → detalle sin número");
+  - |-
+    debugLog.push(`Total: ${n} movimientos`);
+  - |-
+    log.push("1. otro objeto, no es el debug log");
+invalid:
+  - |-
+    debugLog.push("1. Navegando al login");
+  - |-
+    debugLog.push(`2. Abriendo ${site}`);
+  - |-
+    debugLog.push('10) Paso con paréntesis');

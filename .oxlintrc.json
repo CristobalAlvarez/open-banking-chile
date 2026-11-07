@@ -1,0 +1,54 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["import", "node", "promise", "typescript", "unicorn", "oxc"],
+  "categories": {
+    "correctness": "error",
+    "suspicious": "warn",
+    "perf": "warn"
+  },
+  "env": {
+    "node": true,
+    "es2024": true
+  },
+  "ignorePatterns": ["dist/**", "node_modules/**", "debug/**", "screenshots/**"],
+  "rules": {
+    // Los scrapers avanzan paso a paso sobre una misma página: el orden es parte del flujo.
+    "eslint/no-await-in-loop": "off",
+    // Sugerencias de estilo, no de corrección.
+    "unicorn/no-array-sort": "off",
+    "unicorn/consistent-function-scoping": "off",
+    // Nombres con guion bajo intencionales (`_onDebug`, `__obcCapture` expuesto a la página).
+    "eslint/no-underscore-dangle": "off",
+    "oxc/no-map-spread": "off",
+    // El código dentro de `page.evaluate` estrecha nodos del DOM con `as HTMLElement` a todas horas.
+    // La aserción que sí importa (`as BankMovement` sobre el contrato) la prohíbe ast-grep.
+    "typescript/no-unsafe-type-assertion": "off",
+    // tsc es la autoridad: oxlint marca como innecesarios 9 casts a `HTMLElement` que sí hacen falta.
+    "typescript/no-unnecessary-type-assertion": "off",
+
+    // La librería informa por `debugLog`/`onProgress` y se configura por `ScraperOptions`.
+    "eslint/no-console": "error",
+    "node/no-process-env": "error"
+  },
+  "overrides": [
+    {
+      // Única lectura del entorno permitida: detectar si hay display para el modo headful.
+      "files": ["src/browser/browser.ts"],
+      "rules": { "node/no-process-env": "off" }
+    },
+    {
+      // `page.evaluate(new Function(allDeepJs() + …))` inyecta el helper que perfora Shadow DOM.
+      "files": ["src/banks/scotiabank/**"],
+      "rules": { "typescript/no-implied-eval": "off" }
+    },
+    {
+      // Herramientas de desarrollo (no se publican): hablan por consola y leen el entorno.
+      "files": ["scripts/**"],
+      "rules": { "eslint/no-console": "off", "node/no-process-env": "off" }
+    },
+    {
+      "files": ["**/*.test.ts"],
+      "rules": { "eslint/no-console": "off", "typescript/unbound-method": "off" }
+    }
+  ]
+}

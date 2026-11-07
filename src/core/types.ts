@@ -1,0 +1,160 @@
+/** Origen del movimiento */
+export const MOVEMENT_SOURCE = {
+  account: "account",
+  credit_card_unbilled: "credit_card_unbilled",
+  credit_card_billed: "credit_card_billed",
+} as const;
+
+export type MovementSource = (typeof MOVEMENT_SOURCE)[keyof typeof MOVEMENT_SOURCE];
+
+/** Titular de la tarjeta */
+export const CARD_OWNER = {
+  titular: "titular",
+  adicional: "adicional",
+} as const;
+
+export type CardOwner = (typeof CARD_OWNER)[keyof typeof CARD_OWNER];
+
+/** Un movimiento bancario individual */
+export interface BankMovement {
+  /** Fecha del movimiento (formato dd-mm-yyyy) */
+  date: string;
+  /** Descripción del movimiento (sin prefijos de origen) */
+  description: string;
+  /** Monto: positivo = abono (depósito), negativo = cargo (gasto) */
+  amount: number;
+  /** Saldo después del movimiento */
+  balance: number;
+  /** Origen: cuenta corriente, TC no facturada, TC facturada */
+  source: MovementSource;
+  /** Titular o adicional de la tarjeta */
+  owner?: CardOwner;
+  /** Identificador de la tarjeta (ej: "****8335") — útil cuando hay múltiples tarjetas */
+  card?: string;
+  /** Cuotas (ej: "01/01", "02/06") */
+  installments?: string;
+  /** Monto total de la compra (distinto de amount cuando es en cuotas) */
+  totalAmount?: number;
+  /** Moneda del movimiento cuando no es en pesos (ej: "USD"). Ausente = CLP */
+  currency?: "CLP" | "USD";
+}
+
+/** Saldo y movimientos de una cuenta bancaria */
+export interface AccountBalance {
+  /** Identificador de la cuenta (ej: "Cuenta Corriente ****2706") */
+  label?: string;
+  /** Saldo actual */
+  balance?: number;
+  /** Movimientos de la cuenta */
+  movements: BankMovement[];
+}
+
+/** Saldo de una tarjeta de crédito */
+export interface CreditCardBalance {
+  /** Etiqueta de la tarjeta (ej: "Mastercard Black ****5824") */
+  label: string;
+  /** Cupo nacional */
+  national?: {
+    used: number;
+    available: number;
+    total: number;
+  };
+  /** Cupo internacional */
+  international?: {
+    used: number;
+    available: number;
+    total: number;
+    currency: string;
+  };
+  /** Periodo de facturación actual (ej: "Febrero 2026") */
+  billingPeriod?: string;
+  /** Próxima fecha de facturación (formato dd-mm-yyyy) */
+  nextBillingDate?: string;
+  /** Próxima fecha de vencimiento de pago (formato dd-mm-yyyy) */
+  nextDueDate?: string;
+  /** Gastos del período actual (no facturados) */
+  periodExpenses?: number;
+  /** Datos del último estado de cuenta facturado */
+  lastStatement?: {
+    /** Fecha de facturación dd-mm-yyyy */
+    billingDate: string;
+    /** Monto total facturado */
+    billedAmount: number;
+    /** Fecha de vencimiento dd-mm-yyyy */
+    dueDate: string;
+    /** Pago mínimo */
+    minimumPayment?: number;
+  };
+  /** Movimientos de la tarjeta */
+  movements?: BankMovement[];
+}
+
+/** Resultado del scraping */
+export interface ScrapeResult {
+  /** Si el scraping fue exitoso */
+  success: boolean;
+  /** Nombre del banco */
+  bank: string;
+  /** Cuentas bancarias con sus movimientos */
+  accounts?: AccountBalance[];
+  /** Saldos de tarjetas de crédito */
+  creditCards?: CreditCardBalance[];
+  /** Mensaje de error si success = false */
+  error?: string;
+  /** Screenshot en base64 (para debugging) */
+  screenshot?: string;
+  /** Log de debug con pasos del scraper */
+  debug?: string;
+}
+
+/** Credenciales de autenticación */
+export interface BankCredentials {
+  /** RUT del titular (con o sin formato, ej: "12345678-9" o "123456789") */
+  rut: string;
+  /** Clave de internet del banco */
+  password: string;
+}
+
+/** Opciones para el scraper */
+export interface ScraperOptions extends BankCredentials {
+  /** Ruta al ejecutable de Chrome/Chromium. Si no se provee, busca automáticamente. */
+  chromePath?: string;
+  /** Si es true, guarda screenshots en ./screenshots/ para debugging */
+  saveScreenshots?: boolean;
+  /** Si es true, usa headless: false (para debugging visual) */
+  headful?: boolean;
+  /** Filtro Titular/Adicional para TC (ej: "T" = titular, "A" = adicional, "B" = todos). Default: "B" */
+  owner?: "T" | "A" | "B";
+  /** Callback de progreso para mostrar estado al usuario */
+  onProgress?: (step: string) => void;
+  /** Callback invocado en cada línea de debug en tiempo real */
+  onDebug?: (line: string) => void;
+  /** URL del proxy SOCKS5/HTTP para las peticiones del browser (ej: "socks5://100.109.27.125:1080") */
+  proxyUrl?: string;
+  /**
+   * Fecha desde la que se necesitan movimientos (dd-mm-yyyy). Los scrapers que paginan
+   * la usan para cortar cuando ya cubrieron el hueco; no filtra el resultado.
+   */
+  since?: string;
+  /** Segundos máximos de espera por la aprobación manual del 2FA (mín. 30, máx. 600). Default: 180. */
+  twoFactorTimeoutSec?: number;
+  /**
+   * Periodos históricos adicionales a consultar (bice, bancosecurity, scotiabank).
+   * Cada banco aplica su propio default y tope; 0 = solo el periodo actual.
+   */
+  historicalMonths?: number;
+  /** Segundos máximos para resolver el CAPTCHA a mano en modo headful (cencosud). Default: 180. */
+  captchaTimeoutSec?: number;
+}
+
+/** Interfaz que debe implementar cada banco */
+export interface BankScraper {
+  /** Identificador único del banco (ej: "falabella", "santander") */
+  id: string;
+  /** Nombre completo del banco */
+  name: string;
+  /** URL del portal web del banco */
+  url: string;
+  /** Ejecutar el scraping */
+  scrape(options: ScraperOptions): Promise<ScrapeResult>;
+}

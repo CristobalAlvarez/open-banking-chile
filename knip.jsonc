@@ -1,0 +1,6 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  // `src/index.ts` (la API pública) lo detecta knip desde `main`/`exports`; `scripts/*.mjs` se ejecutan desde npm.
+  "entry": ["scripts/*.mjs"],
+  "project": ["src/**/*.ts", "scripts/**/*.mjs"],
+}

@@ -1,0 +1,9 @@
+node_modules/
+dist/
+coverage/
+debug/
+screenshots/
+package-lock.json
+
+# Fixtures: capturas/HTML de referencia; no se reformatean.
+**/__fixtures__/
