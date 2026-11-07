@@ -2,7 +2,12 @@ import type { BankMovement, MovementSource } from "../../core/types.js";
 import { MOVEMENT_SOURCE } from "../../core/types.js";
 import { normalizeDate, normalizeInstallments } from "../../core/parsing.js";
 
-import type { ApiCartolaMov, ApiTransaccionFacturada } from "./api.js";
+import type {
+  ApiCartolaMov,
+  ApiMovNoFactur,
+  ApiTransaccionFacturada,
+  ApiTransaccionInternacional,
+} from "./api.js";
 
 /** BChile manda los flags como "S"/"N" o boolean; `Boolean("N")` sería true. */
 export function parseCartolaFlag(value: unknown): boolean {
@@ -58,23 +63,85 @@ export function cartolaMovToMovement(mov: ApiCartolaMov): BankMovement {
     date: normalizeDate(mov.fechaContable),
     description: mov.descripcion.trim(),
     amount: mov.tipo === "cargo" ? -Math.abs(mov.monto) : Math.abs(mov.monto),
-    balance: mov.saldo,
+    balance: Number(mov.saldo) || 0,
     source: MOVEMENT_SOURCE.account,
   };
 }
 
+/**
+ * Movimiento del estado de cuenta nacional. Si la fila no trae fecha (el portal la manda `null` en
+ * algunos avances), usa `fallbackDate` —la fecha de facturación del estado— en lugar de fallar.
+ */
 export function facturadoToMovement(
   tx: ApiTransaccionFacturada,
   source: MovementSource,
-  cardMask?: string
+  cardMask?: string,
+  fallbackDate?: string
 ): BankMovement {
   return {
-    date: normalizeDate(tx.fechaTransaccionString),
-    description: tx.descripcion.trim(),
+    date: normalizeDate(tx.fechaTransaccionString ?? fallbackDate ?? ""),
+    description: (tx.descripcion ?? "").trim(),
     amount: tx.grupo === "pagos" ? Math.abs(tx.montoTransaccion) : -Math.abs(tx.montoTransaccion),
     balance: 0,
     source,
     card: cardMask,
     installments: normalizeInstallments(tx.cuotas),
+  };
+}
+
+/**
+ * Filas de subtotal del estado de cuenta nacional que no son movimientos:
+ * "TOTAL PAGOS A LA CUENTA", "TOTAL TARJETA XXXXXXXXXXXX1234", etc.
+ */
+export function isNationalSubtotal(descripcion: string | null | undefined): boolean {
+  const desc = (descripcion ?? "").trim().toUpperCase();
+  return (
+    (desc.startsWith("TOTAL ") && desc.endsWith("A LA CUENTA")) || desc.startsWith("TOTAL TARJETA ")
+  );
+}
+
+/**
+ * Movimiento no facturado de una tarjeta. Los internacionales (origen INT, moneda de origen 840)
+ * vienen en USD con decimales: se marcan con `currency: "USD"` para no confundirlos con pesos.
+ */
+export function noFacturadoToMovement(mov: ApiMovNoFactur, cardMask: string): BankMovement {
+  const isUsd = mov.origenTransaccion === "INT" && String(mov.codigoMonedaOrigen) === "840";
+  return {
+    date: normalizeDate(mov.fechaTransaccionString),
+    description: mov.glosaTransaccion.trim(),
+    amount: mov.montoCompra < 0 ? Math.abs(mov.montoCompra) : -Math.abs(mov.montoCompra),
+    balance: 0,
+    source: MOVEMENT_SOURCE.credit_card_unbilled,
+    card: cardMask,
+    installments: normalizeInstallments(mov.despliegueCuotas),
+    ...(isUsd ? { currency: "USD" as const } : {}),
+  };
+}
+
+/**
+ * Los subtotales del estado internacional ("TOTAL DE COMPRAS", "COMISIONES, OTROS CARGOS…") vienen
+ * como filas más con el `grupo` en mayúsculas; los movimientos reales usan "generico" o "pagos".
+ */
+export function isInternationalSubtotal(tx: ApiTransaccionInternacional): boolean {
+  return (
+    /^[A-ZÁÉÍÓÚÑ0-9 ,.-]{6,}$/.test((tx.grupo ?? "").trim()) ||
+    (tx.descripcion ?? "").trim().toUpperCase().startsWith("TOTAL ")
+  );
+}
+
+/** Movimiento del estado de cuenta internacional facturado: siempre USD. */
+export function facturadoInternacionalToMovement(
+  tx: ApiTransaccionInternacional,
+  cardMask: string
+): BankMovement {
+  return {
+    date: normalizeDate(tx.fechaTransaccionString),
+    description: (tx.descripcion ?? "").trim(),
+    // montoDolar: positivo = cargo, negativo = pago o abono.
+    amount: -tx.montoDolar,
+    balance: 0,
+    source: MOVEMENT_SOURCE.credit_card_billed,
+    card: cardMask,
+    currency: "USD",
   };
 }

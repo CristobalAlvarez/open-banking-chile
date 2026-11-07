@@ -4,8 +4,12 @@ import {
   cartolaMovToMovement,
   cartolaTotal,
   chileanDateKey,
+  facturadoInternacionalToMovement,
   facturadoToMovement,
   hasMoreCartola,
+  isInternationalSubtotal,
+  isNationalSubtotal,
+  noFacturadoToMovement,
   parseCartolaFlag,
   selectStatementDates,
 } from "./parse.js";
@@ -193,5 +197,111 @@ describe("facturadoToMovement", () => {
     );
     expect(mov.installments).toBe("03/06");
     expect(mov.card).toBeUndefined();
+  });
+});
+
+describe("cartolaMovToMovement: saldo", () => {
+  it("convierte a número el saldo que el portal manda como string", () => {
+    const mov = cartolaMovToMovement({
+      descripcion: "Compra",
+      monto: 1000,
+      saldo: "1234567",
+      tipo: "cargo",
+      fechaContable: "16/09/2026",
+    });
+    expect(mov.balance).toBe(1234567);
+    expect(mov.amount).toBe(-1000);
+  });
+});
+
+describe("moneda de los movimientos de tarjeta", () => {
+  const unbilled = {
+    fechaTransaccionString: "02/11/2026",
+    glosaTransaccion: "COMPRA",
+    despliegueCuotas: "01/01",
+  };
+
+  it("marca en USD los no facturados internacionales (origen INT, moneda 840) y no los nacionales", () => {
+    const intl = noFacturadoToMovement(
+      { ...unbilled, origenTransaccion: "INT", codigoMonedaOrigen: "840", montoCompra: 12.5 },
+      "****1111"
+    );
+    const national = noFacturadoToMovement(
+      { ...unbilled, origenTransaccion: "NAC", codigoMonedaOrigen: 152, montoCompra: 12500 },
+      "****1111"
+    );
+
+    expect(intl).toMatchObject({ amount: -12.5, currency: "USD" });
+    expect(national.amount).toBe(-12500);
+    expect(national.currency).toBeUndefined();
+  });
+
+  it("un abono internacional (monto negativo) queda positivo en USD", () => {
+    const refund = noFacturadoToMovement(
+      { ...unbilled, origenTransaccion: "INT", codigoMonedaOrigen: 840, montoCompra: -9.99 },
+      "****1111"
+    );
+    expect(refund).toMatchObject({ amount: 9.99, currency: "USD" });
+  });
+
+  it("el estado internacional facturado va en USD: compras negativas, pagos positivos", () => {
+    const base = { fechaTransaccionString: "05/10/2026", grupo: "generico" };
+    const purchase = facturadoInternacionalToMovement(
+      { ...base, descripcion: " COMPRA US ", montoDolar: 25.5 },
+      "****1111"
+    );
+    const payment = facturadoInternacionalToMovement(
+      { ...base, grupo: "pagos", descripcion: "PAGO", montoDolar: -10 },
+      "****1111"
+    );
+
+    expect(purchase).toMatchObject({
+      description: "COMPRA US",
+      amount: -25.5,
+      currency: "USD",
+      source: MOVEMENT_SOURCE.credit_card_billed,
+    });
+    expect(payment).toMatchObject({ amount: 10, currency: "USD" });
+  });
+
+  it("distingue los subtotales del estado internacional de los movimientos", () => {
+    const row = (grupo: string, descripcion = "COMPRA US") => ({
+      fechaTransaccionString: "05/10/2026",
+      descripcion,
+      montoDolar: 1,
+      grupo,
+    });
+    expect(isInternationalSubtotal(row("TOTAL DE COMPRAS", "TOTAL DE COMPRAS"))).toBe(true);
+    expect(isInternationalSubtotal(row("COMISIONES, OTROS CARGOS Y ABONOS A LA C"))).toBe(true);
+    expect(isInternationalSubtotal(row("generico"))).toBe(false);
+    expect(isInternationalSubtotal(row("pagos", "PAGO"))).toBe(false);
+  });
+});
+
+describe("facturadoToMovement: fila sin fecha", () => {
+  it("usa la fecha de facturación cuando el portal manda la fecha en null", () => {
+    const mov = facturadoToMovement(
+      {
+        fechaTransaccionString: null,
+        montoTransaccion: 5000,
+        descripcion: " AVANCE ",
+        cuotas: "01/01",
+        grupo: "avancesCompras",
+      },
+      MOVEMENT_SOURCE.credit_card_billed,
+      "****1111",
+      "2026-10-21"
+    );
+    expect(mov).toMatchObject({ date: "21-10-2026", description: "AVANCE", amount: -5000 });
+  });
+});
+
+describe("isNationalSubtotal", () => {
+  it("reconoce las filas de subtotal del estado nacional y no las compras", () => {
+    expect(isNationalSubtotal("TOTAL PAGOS A LA CUENTA")).toBe(true);
+    expect(isNationalSubtotal(" TOTAL TARJETA XXXXXXXXXXXX1234")).toBe(true);
+    expect(isNationalSubtotal("TOTAL PARTS SPA")).toBe(false);
+    expect(isNationalSubtotal("COMPRA SUPERMERCADO")).toBe(false);
+    expect(isNationalSubtotal(null)).toBe(false);
   });
 });

@@ -18,6 +18,12 @@
 - **Cuotas**: `normalizeInstallments` entrega siempre `NN/NN` o `undefined` (BICE emitía `"3 de 12"`, Cencosud podía emitir `"3 Cuotas"`).
 - **Falabella**: se descartan las filas de cuenta con monto 0.
 - **BCI**: el cupo internacional en USD conserva los decimales (`USD 10,50` ya no pasa a `1050`).
+- **Banco de Chile** (detectado en corridas reales):
+  - el saldo de cada movimiento de cuenta llegaba como `string`; ahora es `number`;
+  - con varias tarjetas sobre la misma cuenta el portal repite la lista completa en cada una; ahora se informa una sola vez (antes se triplicaba);
+  - **moneda**: los movimientos internacionales no facturados (origen INT, moneda 840) vienen en USD con decimales y se mostraban como pesos; ahora llevan `currency: "USD"`;
+  - **estado de cuenta internacional**: sus movimientos (pagos, compras y comisiones, en USD) nunca se leían porque el código buscaba otras secciones; ahora se informan con `currency: "USD"` y sin las filas de subtotal;
+  - una fila del estado nacional sin fecha (algunos avances) lanzaba un error que se tragaba en silencio y cortaba el resto del estado: se perdía una parte de los facturados. Ahora usa la fecha de facturación, el error ya no se oculta (queda en `debug`) y se omiten las filas `TOTAL TARJETA …` que se colaban como movimientos.
 - Cencosud: el error de CAPTCHA en headless ya no menciona el flag `--headful` del CLI eliminado.
 
 ### Añadido

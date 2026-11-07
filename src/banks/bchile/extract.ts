@@ -1,7 +1,7 @@
 import type { Page } from "puppeteer-core";
 import type { BankMovement, CreditCardBalance } from "../../core/types.js";
 import { MOVEMENT_SOURCE } from "../../core/types.js";
-import { monthYearLabel, normalizeDate, normalizeInstallments } from "../../core/parsing.js";
+import { monthYearLabel, normalizeDate } from "../../core/parsing.js";
 import type { DebugLog } from "../../core/debug-log.js";
 import { apiPost } from "./api.js";
 import type {
@@ -20,8 +20,12 @@ import {
   cartolaMovToMovement,
   cartolaTotal,
   chileanDateKey,
+  facturadoInternacionalToMovement,
   facturadoToMovement,
   hasMoreCartola,
+  isInternationalSubtotal,
+  isNationalSubtotal,
+  noFacturadoToMovement,
   selectStatementDates,
 } from "./parse.js";
 
@@ -103,7 +107,7 @@ export async function fetchAccountMovements(
       const firstRows = cartola.movimientos ?? [];
       addPage(firstRows);
       if (balance === undefined && acct.codigoMoneda === "CLP" && firstRows.length > 0)
-        balance = firstRows[0].saldo;
+        balance = Number(firstRows[0].saldo) || 0;
       debugLog.push(
         `    → cartola p1: ${firstRows.length} filas, ${uniqueFetched} únicas ` +
           `(total ${cartolaTotal(info) ?? "?"}, masPaginas=${String(info?.masPaginas)})`
@@ -187,7 +191,11 @@ export async function fetchCreditCardData(
 
   debugLog.push(`  Found ${cards.length} credit card(s)`);
 
+  // Con varias tarjetas en la misma cuenta, el portal devuelve la lista de la cuenta completa para
+  // cada una: se informa una sola vez para que el consumidor no las triplique.
+  const seenCardLists = new Set<string>();
   for (const card of cards) {
+    const firstOfCard = movements.length;
     const cardLabel = `${card.marca} ${card.tipo} ${card.numero.slice(-8)}`.trim();
     const mascara =
       card.numero.replace(/\*/g, "").length <= 4 ? `****${card.numero.slice(-4)}` : card.numero;
@@ -232,19 +240,7 @@ export async function fetchCreditCardData(
         ccEntry.nextBillingDate = normalizeDate(nf.fechaProximaFacturacionCalendario);
       const nextDue = nf.fechaProximoVencimiento ?? nf.fechaVencimiento;
       if (nextDue) ccEntry.nextDueDate = normalizeDate(nextDue);
-      const unbilledMovs: BankMovement[] = [];
-      for (const mov of nf.listaMovNoFactur) {
-        const amount = mov.montoCompra < 0 ? Math.abs(mov.montoCompra) : -Math.abs(mov.montoCompra);
-        unbilledMovs.push({
-          date: normalizeDate(mov.fechaTransaccionString),
-          description: mov.glosaTransaccion.trim(),
-          amount,
-          balance: 0,
-          source: MOVEMENT_SOURCE.credit_card_unbilled,
-          card: mascara,
-          installments: normalizeInstallments(mov.despliegueCuotas),
-        });
-      }
+      const unbilledMovs = nf.listaMovNoFactur.map((mov) => noFacturadoToMovement(mov, mascara));
       // periodExpenses: suma de cargos no facturados (montos negativos → gastos)
       const periodExpensesRaw = nf.gastosPeriodo ?? nf.montoGastosPeriodo;
       ccEntry.periodExpenses =
@@ -292,11 +288,20 @@ export async function fetchCreditCardData(
                 ...(res.seccionCargosImpuestosAbonos?.transaccionesTarjetas ?? []),
               ];
               for (const tx of allTx) {
-                // Skip section-subtotal rows (e.g. "TOTAL PAGOS A LA CUENTA").
-                const desc = tx.descripcion.trim().toUpperCase();
-                if (desc.startsWith("TOTAL ") && desc.endsWith("A LA CUENTA")) continue;
+                // Las filas de subtotal no son movimientos.
+                if (isNationalSubtotal(tx.descripcion)) continue;
+                if (!tx.fechaTransaccionString) {
+                  debugLog.push(
+                    `  TC ${fechaFacturacion}: movimiento sin fecha; se usa la fecha de facturación`
+                  );
+                }
                 movements.push(
-                  facturadoToMovement(tx, MOVEMENT_SOURCE.credit_card_billed, mascara)
+                  facturadoToMovement(
+                    tx,
+                    MOVEMENT_SOURCE.credit_card_billed,
+                    mascara,
+                    fechaFacturacion
+                  )
                 );
                 statementMovements++;
               }
@@ -334,12 +339,49 @@ export async function fetchCreditCardData(
                 }
               }
             }
+            if (intR.status === "fulfilled" && intR.value.existeEstadoCuenta) {
+              // El estado internacional usa otras secciones (pagos, compras, comisiones), en USD.
+              const intTx = [
+                intR.value.seccionPagos,
+                intR.value.seccionCompras,
+                intR.value.seccionComisiones,
+              ]
+                .flatMap((section) => section?.transaccionesTarjetas ?? [])
+                .filter((tx) => !isInternationalSubtotal(tx) && tx.montoDolar !== 0);
+              for (const tx of intTx) {
+                movements.push(facturadoInternacionalToMovement(tx, mascara));
+                statementMovements++;
+              }
+            }
             debugLog.push(`  TC ${fechaFacturacion}: ${statementMovements} movimiento(s)`);
           }
         }
       }
-    } catch {
-      /* ignore */
+    } catch (err) {
+      // No se tragan en silencio: un estado de cuenta ilegible dejaría la tarjeta sin facturados.
+      debugLog.push(
+        `  TC ${mascara}: error leyendo estados de cuenta: ${err instanceof Error ? err.message : String(err)}`
+      );
+    }
+
+    const cardMovements = movements.slice(firstOfCard);
+    if (cardMovements.length > 0) {
+      const signature = cardMovements
+        .map((m) =>
+          [m.date, m.description, m.amount, m.currency ?? "", m.source, m.installments ?? ""].join(
+            "|"
+          )
+        )
+        .sort()
+        .join("\n");
+      if (seenCardLists.has(signature)) {
+        movements.length = firstOfCard;
+        debugLog.push(
+          `  TC ${mascara}: mismos movimientos que otra tarjeta de la cuenta; no se repiten`
+        );
+      } else {
+        seenCardLists.add(signature);
+      }
     }
   }
 

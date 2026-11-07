@@ -32,12 +32,15 @@ export interface ApiCardSaldo {
   cupoUtilizadoInternacional: number;
   cupoDisponibleInternacional: number;
 }
-interface ApiMovNoFactur {
+export interface ApiMovNoFactur {
   origenTransaccion: string;
   fechaTransaccionString: string;
+  /** En pesos para origen NAC; en USD (con decimales) para origen INT. */
   montoCompra: number;
   glosaTransaccion: string;
   despliegueCuotas: string;
+  /** ISO 4217 numérico de la moneda de origen: 152 = CLP, 840 = USD. */
+  codigoMonedaOrigen?: string | number;
 }
 export interface ApiNoFacturResponse {
   fechaProximaFacturacionCalendario: string;
@@ -53,7 +56,8 @@ export interface ApiFechaFacturacion {
   existeEstadoCuentaInternacional: string;
 }
 export interface ApiTransaccionFacturada {
-  fechaTransaccionString: string;
+  /** Algunas filas (p. ej. avances) vienen sin fecha: `null`. */
+  fechaTransaccionString: string | null;
   montoTransaccion: number;
   descripcion: string;
   cuotas: string;
@@ -66,10 +70,25 @@ interface ApiResumenNested {
   fechaVencimientoFacturacion?: string;
   fechaProximaFacturacion?: string;
 }
+/** Movimiento del estado de cuenta internacional (siempre en USD). */
+export interface ApiTransaccionInternacional {
+  fechaTransaccionString: string;
+  descripcion: string;
+  /** USD: positivo = cargo, negativo = pago o abono. */
+  montoDolar: number;
+  /** "generico"/"pagos" en movimientos; títulos en mayúsculas ("TOTAL DE COMPRAS") en subtotales. */
+  grupo: string;
+}
+interface ApiSeccionInternacional {
+  transaccionesTarjetas: ApiTransaccionInternacional[] | null;
+}
 export interface ApiResumenFacturado {
   existeEstadoCuenta: boolean;
   seccionOperaciones?: { transaccionesTarjetas: ApiTransaccionFacturada[] };
   seccionCargosImpuestosAbonos?: { transaccionesTarjetas: ApiTransaccionFacturada[] | null };
+  seccionPagos?: ApiSeccionInternacional;
+  seccionCompras?: ApiSeccionInternacional;
+  seccionComisiones?: ApiSeccionInternacional;
   resumen?: ApiResumenNested;
   totalFacturado?: number;
   montoTotalFacturado?: number;
@@ -84,7 +103,8 @@ export interface ApiCartolaMov {
   id?: string;
   descripcion: string;
   monto: number;
-  saldo: number;
+  /** El portal lo manda como string ("1234567") aunque el tipo diga número. */
+  saldo: number | string;
   tipo: string;
   fechaContable: string;
 }
