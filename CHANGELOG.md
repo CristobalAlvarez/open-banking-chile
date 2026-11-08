@@ -24,6 +24,7 @@
   - **moneda**: los movimientos internacionales no facturados (origen INT, moneda 840) vienen en USD con decimales y se mostraban como pesos; ahora llevan `currency: "USD"`;
   - **estado de cuenta internacional**: sus movimientos (pagos, compras y comisiones, en USD) nunca se leían porque el código buscaba otras secciones; ahora se informan con `currency: "USD"` y sin las filas de subtotal;
   - una fila del estado nacional sin fecha (algunos avances) lanzaba un error que se tragaba en silencio y cortaba el resto del estado: se perdía una parte de los facturados. Ahora usa la fecha de facturación, el error ya no se oculta (queda en `debug`) y se omiten las filas `TOTAL TARJETA …` que se colaban como movimientos.
+- **Itaú** (detectado en corridas reales): el cupo internacional (USD) devolvía `available` y `total` cruzados cuando el cupo estaba en uso (se leía por posición fija y el portal los muestra como disponible, utilizado, total). Ahora se empareja cada valor con su etiqueta.
 - Cencosud: el error de CAPTCHA en headless ya no menciona el flag `--headful` del CLI eliminado.
 
 ### Añadido
@@ -39,6 +40,7 @@
 - Cada banco es un directorio (`index`, `login`, `navigation`, `parse`, …) siguiendo la plantilla `src/banks/edwards/`.
 - `utils.ts` se repartió en `core/`, `browser/` y `steps/`; `actions/` pasó a `steps/` e `infrastructure/` a `browser/`.
 - Falabella sigue sobre Playwright (launcher en `src/browser/playwright.ts`); es la única excepción a `runScraper`.
+- Itaú: la extracción de los estados de cuenta facturados (nacional e internacional) pasó a `extractBilledRows` y el parseo del resumen de la tarjeta (etiqueta, cupos, próxima facturación) a `parseCreditCardSummary`, función pura sobre el texto de la página. Ambas se prueban contra fixtures/texto sintéticos junto con la cartola de la cuenta. Verificado en vivo: la tabla nacional trae la cuota actual y total (`NN/NN`) en todas las filas facturadas y en las no facturadas que son compras en cuotas.
 
 ## 2.0.0
 

@@ -1,0 +1,97 @@
+<!--
+  Sintético, con la forma del estado de cuenta nacional de Itaú (`operacion_Table`):
+  8 columnas fijas, filas de título de sección con una sola celda y "N° cuota" como `actual/total`
+  sin relleno ("01/1" = pago único). Los montos y comercios son inventados.
+-->
+<table id="EstadoDeudaNacionalPortletip_estadoDeCuentaTarjetaoperacion_table" name="operacion_Table">
+  <tbody>
+    <tr name="TableHeaderContainer" class="tableHeadRow">
+      <th name="Ciudad_ColumnHeader" class="tableHead" scope="col"><span class="tableHeadText">Lugar de operación</span></th>
+      <th name="NumeroReferencia_iso8601_ColumnHeader" class="tableHead" scope="col"><span class="tableHeadText">Fecha operación</span></th>
+      <th name="CodigoReferencia_ColumnHeader" class="tableHead" scope="col"><span class="tableHeadText">Código referencia</span></th>
+      <th name="Descripcion_ColumnHeader" class="tableHead" scope="col"><span class="tableHeadText">Descripción operación o cobro</span></th>
+      <th name="MontoTransaccion_iso8601_ColumnHeader" class="tableHead" scope="col"><span class="tableHeadText">Monto Operación</span></th>
+      <th name="fld_31_iso8601_ColumnHeader" class="tableHead" scope="col"><span class="tableHeadText">Monto total a pagar</span></th>
+      <th name="cuota_ColumnHeader" class="tableHead" scope="col"><span class="tableHeadText">N° cuota</span></th>
+      <th name="operacion_fld_21_iso8601_ColumnHeader" class="tableHead" scope="col"><span class="tableHeadText">Valor cuota</span></th>
+    </tr>
+
+    <tr name="DataContainer" class="tableRowOdd">
+      <td name="Descripcion_ColumnData" valign="top" class="bold" colspan="8"><span name="Descripcion" class="outputData">1.Total operaciones</span></td>
+    </tr>
+
+    <!-- Pago único: "01/1" -->
+    <tr name="DataContainer" class="tableRowEven">
+      <td name="Ciudad_ColumnData" valign="top" class="tableCell"><span name="Ciudad" class="outputData">Santiago</span></td>
+      <td name="NumeroReferencia_iso8601_ColumnData" valign="top" class="tableCell"><span name="NumeroReferencia_iso8601" class="outputData">05/10/2026</span></td>
+      <td name="CodigoReferencia_ColumnData" valign="top" class="tableCell"><span name="CodigoReferencia" class="outputData">0000000000000001</span></td>
+      <td name="Descripcion_ColumnData" valign="top" class="" colspan="1"><span name="Descripcion" class="outputData">COMERCIO EJEMPLO UNO</span></td>
+      <td name="MontoTransaccion_iso8601_ColumnData" valign="top" class="tableCell" align="Right"><span name="MontoTransaccion_iso8601" class="outputData">$ 63.111</span></td>
+      <td name="fld_31_iso8601_ColumnData" valign="top" class="tableCell" align="Right"><span name="fld_31_iso8601" class="outputData">$ 63.111</span></td>
+      <td name="cuota_ColumnData" valign="top" class="tableCell" align="Right"><span name="cuota" class="outputData">01/1</span></td>
+      <td name="operacion_fld_21_iso8601_ColumnData" valign="top" class="tableCell" align="Right"><span name="operacion_fld_21_iso8601" class="outputData">$ 63.111</span></td>
+    </tr>
+
+    <!-- Cuota intermedia de 10, con interés: cuota 6 de 10 -->
+    <tr name="DataContainer" class="tableRowOdd">
+      <td name="Ciudad_ColumnData" valign="top" class="tableCell"><span name="Ciudad" class="outputData">Santiago</span></td>
+      <td name="NumeroReferencia_iso8601_ColumnData" valign="top" class="tableCell"><span name="NumeroReferencia_iso8601" class="outputData">17/03/2026</span></td>
+      <td name="CodigoReferencia_ColumnData" valign="top" class="tableCell"><span name="CodigoReferencia" class="outputData">0000000000000002</span></td>
+      <td name="Descripcion_ColumnData" valign="top" class="" colspan="1"><span name="Descripcion" class="outputData">COMERCIO EJEMPLO DOS tasa int. 2,76%</span></td>
+      <td name="MontoTransaccion_iso8601_ColumnData" valign="top" class="tableCell" align="Right"><span name="MontoTransaccion_iso8601" class="outputData">$ 802.230</span></td>
+      <td name="fld_31_iso8601_ColumnData" valign="top" class="tableCell" align="Right"><span name="fld_31_iso8601" class="outputData">$ 802.230</span></td>
+      <td name="cuota_ColumnData" valign="top" class="tableCell" align="Right"><span name="cuota" class="outputData">06/10</span></td>
+      <td name="operacion_fld_21_iso8601_ColumnData" valign="top" class="tableCell" align="Right"><span name="operacion_fld_21_iso8601" class="outputData">$ 80.223</span></td>
+    </tr>
+
+    <!-- Primera cuota de un plan de 12 (dos dígitos en el total) -->
+    <tr name="DataContainer" class="tableRowEven">
+      <td name="Ciudad_ColumnData" valign="top" class="tableCell"><span name="Ciudad" class="outputData">Providencia</span></td>
+      <td name="NumeroReferencia_iso8601_ColumnData" valign="top" class="tableCell"><span name="NumeroReferencia_iso8601" class="outputData">02/10/2026</span></td>
+      <td name="CodigoReferencia_ColumnData" valign="top" class="tableCell"><span name="CodigoReferencia" class="outputData">0000000000000003</span></td>
+      <td name="Descripcion_ColumnData" valign="top" class="" colspan="1"><span name="Descripcion" class="outputData">COMERCIO EJEMPLO TRES</span></td>
+      <td name="MontoTransaccion_iso8601_ColumnData" valign="top" class="tableCell" align="Right"><span name="MontoTransaccion_iso8601" class="outputData">$ 1.200.000</span></td>
+      <td name="fld_31_iso8601_ColumnData" valign="top" class="tableCell" align="Right"><span name="fld_31_iso8601" class="outputData">$ 1.200.000</span></td>
+      <td name="cuota_ColumnData" valign="top" class="tableCell" align="Right"><span name="cuota" class="outputData">01/12</span></td>
+      <td name="operacion_fld_21_iso8601_ColumnData" valign="top" class="tableCell" align="Right"><span name="operacion_fld_21_iso8601" class="outputData">$ 100.000</span></td>
+    </tr>
+
+    <!-- Última cuota de un plan de 3: cuota 3 de 3 -->
+    <tr name="DataContainer" class="tableRowOdd">
+      <td name="Ciudad_ColumnData" valign="top" class="tableCell"><span name="Ciudad" class="outputData">Las Condes</span></td>
+      <td name="NumeroReferencia_iso8601_ColumnData" valign="top" class="tableCell"><span name="NumeroReferencia_iso8601" class="outputData">20/07/2026</span></td>
+      <td name="CodigoReferencia_ColumnData" valign="top" class="tableCell"><span name="CodigoReferencia" class="outputData">0000000000000004</span></td>
+      <td name="Descripcion_ColumnData" valign="top" class="" colspan="1"><span name="Descripcion" class="outputData">COMERCIO EJEMPLO CUATRO</span></td>
+      <td name="MontoTransaccion_iso8601_ColumnData" valign="top" class="tableCell" align="Right"><span name="MontoTransaccion_iso8601" class="outputData">$ 90.000</span></td>
+      <td name="fld_31_iso8601_ColumnData" valign="top" class="tableCell" align="Right"><span name="fld_31_iso8601" class="outputData">$ 90.000</span></td>
+      <td name="cuota_ColumnData" valign="top" class="tableCell" align="Right"><span name="cuota" class="outputData">03/3</span></td>
+      <td name="operacion_fld_21_iso8601_ColumnData" valign="top" class="tableCell" align="Right"><span name="operacion_fld_21_iso8601" class="outputData">$ 30.000</span></td>
+    </tr>
+
+    <tr name="DataContainer" class="tableRowEven">
+      <td name="Descripcion_ColumnData" valign="top" class="bold" colspan="8"><span name="Descripcion" class="outputData">3.Cargos, comisiones, impuestos y abonos</span></td>
+    </tr>
+
+    <!-- Comisión y pago de la cuenta: también vienen como "01/1" -->
+    <tr name="DataContainer" class="tableRowOdd">
+      <td name="Ciudad_ColumnData" valign="top" class="tableCell"><span name="Ciudad" class="outputData"></span></td>
+      <td name="NumeroReferencia_iso8601_ColumnData" valign="top" class="tableCell"><span name="NumeroReferencia_iso8601" class="outputData">01/10/2026</span></td>
+      <td name="CodigoReferencia_ColumnData" valign="top" class="tableCell"><span name="CodigoReferencia" class="outputData">0000000000000005</span></td>
+      <td name="Descripcion_ColumnData" valign="top" class="" colspan="1"><span name="Descripcion" class="outputData">COMISION EJEMPLO</span></td>
+      <td name="MontoTransaccion_iso8601_ColumnData" valign="top" class="tableCell" align="Right"><span name="MontoTransaccion_iso8601" class="outputData">$ 24.600</span></td>
+      <td name="fld_31_iso8601_ColumnData" valign="top" class="tableCell" align="Right"><span name="fld_31_iso8601" class="outputData">$ 24.600</span></td>
+      <td name="cuota_ColumnData" valign="top" class="tableCell" align="Right"><span name="cuota" class="outputData">01/1</span></td>
+      <td name="operacion_fld_21_iso8601_ColumnData" valign="top" class="tableCell" align="Right"><span name="operacion_fld_21_iso8601" class="outputData">$ 24.600</span></td>
+    </tr>
+    <tr name="DataContainer" class="tableRowEven">
+      <td name="Ciudad_ColumnData" valign="top" class="tableCell"><span name="Ciudad" class="outputData"></span></td>
+      <td name="NumeroReferencia_iso8601_ColumnData" valign="top" class="tableCell"><span name="NumeroReferencia_iso8601" class="outputData">26/09/2026</span></td>
+      <td name="CodigoReferencia_ColumnData" valign="top" class="tableCell"><span name="CodigoReferencia" class="outputData">0000000000000006</span></td>
+      <td name="Descripcion_ColumnData" valign="top" class="" colspan="1"><span name="Descripcion" class="outputData">MONTO CANCELADO</span></td>
+      <td name="MontoTransaccion_iso8601_ColumnData" valign="top" class="tableCell" align="Right"><span name="MontoTransaccion_iso8601" class="outputData">$ -300.000</span></td>
+      <td name="fld_31_iso8601_ColumnData" valign="top" class="tableCell" align="Right"><span name="fld_31_iso8601" class="outputData">$ -300.000</span></td>
+      <td name="cuota_ColumnData" valign="top" class="tableCell" align="Right"><span name="cuota" class="outputData">01/1</span></td>
+      <td name="operacion_fld_21_iso8601_ColumnData" valign="top" class="tableCell" align="Right"><span name="operacion_fld_21_iso8601" class="outputData">$ -300.000</span></td>
+    </tr>
+  </tbody>
+</table>

@@ -1,6 +1,10 @@
 import { describe, it, expect } from "vitest";
 import { MOVEMENT_SOURCE } from "../../core/types.js";
-import { normalizeItauBilledRows, normalizeItauCreditCardRows } from "./parse.js";
+import {
+  normalizeItauBilledRows,
+  normalizeItauCreditCardRows,
+  parseCreditCardSummary,
+} from "./parse.js";
 
 // ─── normalizeItauBilledRows ─────────────────────────────────────
 
@@ -178,5 +182,97 @@ describe("normalizeItauCreditCardRows", () => {
         unbilled
       )
     ).toEqual([]);
+  });
+});
+
+// ─── parseCreditCardSummary ──────────────────────────────────────
+
+// Texto de la página de deuda con el orden real del portal: en cada sección, "Cupo disponible
+// <valor>", luego las etiquetas "Cupo utilizado" y "Cupo total", y después sus dos valores.
+const nationalBlock = [
+  "Nacional",
+  "Ir a estado de cuenta",
+  "Cupo disponible $ 600.000",
+  "Cupo utilizado",
+  "Cupo total",
+  "$ 4.400.000",
+  "$ 5.000.000",
+  "Monto facturado",
+  "$ 1.900.000",
+  "Monto mínimo",
+  "$ 0",
+];
+
+const internationalBlock = (disponible: string, utilizado: string, total: string) => [
+  "Internacional",
+  "Ir a estado de cuenta",
+  `Cupo disponible USD ${disponible}`,
+  "Cupo utilizado",
+  "Cupo total",
+  `USD ${utilizado}`,
+  `USD ${total}`,
+  "Monto facturado",
+  "USD 34,36",
+];
+
+const debtPageText = (...blocks: string[][]) =>
+  [
+    "Mastercard Legend",
+    "**** **** **** 1234",
+    "Próxima facturación 25/11/2026",
+    ...blocks.flat(),
+    "Ofertas",
+  ].join("\n");
+
+describe("parseCreditCardSummary", () => {
+  it("no cruza disponible, utilizado y total del cupo internacional (USD) cuando hay uso", () => {
+    const card = parseCreditCardSummary(
+      debtPageText(nationalBlock, internationalBlock("5.752,39", "47,61", "5.800"))
+    );
+
+    expect(card?.international).toEqual({
+      used: 47.61,
+      available: 5752.39,
+      total: 5800,
+      currency: "USD",
+    });
+  });
+
+  it("mantiene el cupo internacional sin uso: utilizado 0 no es un valor ausente", () => {
+    const card = parseCreditCardSummary(
+      debtPageText(nationalBlock, internationalBlock("5.800", "0", "5.800"))
+    );
+
+    expect(card?.international).toEqual({
+      used: 0,
+      available: 5800,
+      total: 5800,
+      currency: "USD",
+    });
+  });
+
+  it("lee el cupo nacional en pesos y su total es utilizado + disponible", () => {
+    const card = parseCreditCardSummary(
+      debtPageText(nationalBlock, internationalBlock("5.800", "0", "5.800"))
+    );
+
+    expect(card?.national).toEqual({ used: 4400000, available: 600000, total: 5000000 });
+  });
+
+  it("normaliza la etiqueta de la tarjeta y la fecha de próxima facturación", () => {
+    const card = parseCreditCardSummary(debtPageText(nationalBlock));
+
+    expect(card?.label).toBe("Mastercard Legend ****1234");
+    expect(card?.nextBillingDate).toBe("25-11-2026");
+  });
+
+  it("no informa cupo internacional cuando la tarjeta no tiene esa sección", () => {
+    const card = parseCreditCardSummary(debtPageText(nationalBlock));
+
+    expect(card?.international).toBeUndefined();
+  });
+
+  it("devuelve undefined cuando la página no trae una tarjeta", () => {
+    expect(parseCreditCardSummary("Sin productos contratados")).toBeUndefined();
   });
 });

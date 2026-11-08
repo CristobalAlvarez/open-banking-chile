@@ -293,9 +293,9 @@ Itaú corre detrás de Imperva (reese84). El login usa `#loginNameID` / `#pswdId
 
 ### Itaú: movimientos de tarjeta de crédito
 
-- **No facturados** (`credit_card_unbilled`): se extraen de la página de deuda con la paginación completa (widget Dojo). Las compras en cuotas traen `installments` tal como las muestra el banco (ej. `"00/12"`).
-- **Facturados** (`credit_card_billed`): el `amount` es el **valor cuota** (lo que se carga al período), no el monto original de la compra. Para compras en cuotas, `totalAmount` lleva el monto total de la operación ("Monto total a pagar").
-- **Internacional** (USD): sus movimientos (facturados del estado de cuenta internacional y no facturados) se reportan con `currency: "USD"` y montos en dólares; el cupo queda en `creditCards[].international`.
+- **No facturados** (`credit_card_unbilled`): se extraen de la página de deuda con la paginación completa (widget Dojo). Las compras en cuotas traen `installments` tal como las muestra el banco (`NN/NN`, cuota actual / total); en pagos únicos, comisiones y abonos el banco deja la celda vacía y `installments` queda ausente (no se inventa).
+- **Facturados** (`credit_card_billed`): el `amount` es el **valor cuota** (lo que se carga al período), no el monto original de la compra. Para compras en cuotas, `totalAmount` lleva el monto total de la operación ("Monto total a pagar"). `installments` viene en todas las filas; el pago único es `"01/01"`.
+- **Internacional** (USD): sus movimientos (facturados del estado de cuenta internacional y no facturados) se reportan con `currency: "USD"` y montos en dólares; el cupo queda en `creditCards[].international`. Esas tablas no tienen columna de cuotas: `installments` queda ausente.
 
 ### BancoEstado y modo headless
 

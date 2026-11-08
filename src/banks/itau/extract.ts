@@ -2,10 +2,13 @@ import type { Page } from "puppeteer-core";
 import type { BankMovement, CreditCardBalance } from "../../core/types.js";
 import { MOVEMENT_SOURCE } from "../../core/types.js";
 import type { DebugLog } from "../../core/debug-log.js";
-import { normalizeDate, parseChileanAmount } from "../../core/parsing.js";
 import { extractAccountMovements } from "../../steps/extraction.js";
 import { paginateAndExtract } from "../../steps/pagination.js";
-import { normalizeItauBilledRows, normalizeItauCreditCardRows } from "./parse.js";
+import {
+  normalizeItauBilledRows,
+  normalizeItauCreditCardRows,
+  parseCreditCardSummary,
+} from "./parse.js";
 import {
   openAccountMovements,
   openBalance,
@@ -130,6 +133,75 @@ export async function extractUnbilledRows(
   });
 }
 
+// ─── Itaú TC: movimientos facturados ─────────────────────────────
+//
+// El estado de cuenta nacional (CLP) es la tabla `operacion_Table`, de 8 columnas fijas:
+// Lugar | Fecha operación | Código referencia | Descripción | Monto Operación |
+// Monto total a pagar | N° cuota | Valor cuota. Entre las filas de datos van filas de
+// título de sección con una sola celda (se descartan por tener menos de 8). "N° cuota"
+// llega como `actual/total` sin relleno ("01/1" = pago único, "06/10") y se normaliza a NN/NN.
+// El estado de cuenta internacional (USD) no tiene columna de cuotas.
+
+export async function extractBilledRows(
+  page: Page,
+  kind: "national" | "international"
+): Promise<BankMovement[]> {
+  if (kind === "international") {
+    const intlRows = await page.evaluate((cells) => {
+      const table = document.querySelector('[id$="estadoDeCuentaTarjetarecord_table"]');
+      const results: Array<{ date: string; desc: string; amount: string; isCredit: boolean }> = [];
+      if (!table) return results;
+      for (const row of table.querySelectorAll("tr")) {
+        const dateEl = row.querySelector(`[name="${cells.date}"]`) as HTMLElement | null;
+        const descEl = row.querySelector(`[name="${cells.desc}"]`) as HTMLElement | null;
+        const amountEl = row.querySelector(`[name="${cells.amount}"]`) as HTMLElement | null;
+        const date = (dateEl?.innerText || "").trim();
+        if (!/^\d{2}\/\d{2}\/\d{4}$/.test(date) || !descEl || !amountEl) continue;
+        results.push({
+          date,
+          desc: (descEl.innerText || "").trim(),
+          amount: (amountEl.innerText || "").trim(),
+          isCredit: amountEl.className.includes("abono"),
+        });
+      }
+      return results;
+    }, INTL_CELLS);
+
+    return normalizeItauCreditCardRows(intlRows, {
+      source: MOVEMENT_SOURCE.credit_card_billed,
+      currency: "USD",
+    });
+  }
+
+  const rows = await page.evaluate(() => {
+    const results: Array<{
+      date: string;
+      desc: string;
+      total: string;
+      cuota: string;
+      valorCuota: string;
+    }> = [];
+    const table = document.querySelector('table[name="operacion_Table"]');
+    const trs = table ? table.querySelectorAll("tbody tr") : [];
+    for (const row of trs) {
+      const cells = Array.from(row.querySelectorAll("td"));
+      if (cells.length < 8) continue;
+      const dateText = cells[1]?.innerText?.trim() || "";
+      if (!/^\d{2}\/\d{2}\/\d{4}$/.test(dateText)) continue;
+      results.push({
+        date: dateText,
+        desc: cells[3]?.innerText?.trim() || "",
+        total: cells[5]?.innerText?.trim() || "",
+        cuota: cells[6]?.innerText?.trim() || "",
+        valorCuota: cells[7]?.innerText?.trim() || "",
+      });
+    }
+    return results;
+  });
+
+  return normalizeItauBilledRows(rows);
+}
+
 export async function extractCreditCardData(
   page: Page,
   debugLog: DebugLog,
@@ -142,54 +214,11 @@ export async function extractCreditCardData(
   await openCreditCardDebt(page);
   await doSaveHtml(page, "08-tc-deuda");
 
-  const tcInfo = await page.evaluate(() => {
-    const text = document.body?.innerText || "";
-    const cardMatch = text.match(/(Mastercard|Visa)\s+[\w\s]+\*{4}\s*\*{4}\s*\*{4}\s*(\d{4})/i);
-    const label = cardMatch
-      ? cardMatch[0]
-          .replace(/\*{4}\s*\*{4}\s*\*{4}\s*/, "****")
-          .replace(/\s+/g, " ")
-          .trim()
-      : null;
-    const nacSection =
-      text.match(/Nacional[\s\S]*?(?=Internacional|Ofertas|Movimientos|$)/)?.[0] || "";
-    const nacDisponible = nacSection.match(/Cupo disponible\s*\$\s*([\d.]+)/);
-    const nacUtilizado = nacSection.match(/Cupo utilizado\s*(?:[\s\S]*?\$\s*([\d.]+))?/);
-    const intSection =
-      text.match(/Internacional[\s\S]*?(?=Ofertas|Movimientos|Emergencias|$)/)?.[0] || "";
-    const intUsdValues = [...intSection.matchAll(/USD\$?\s*(-?[\d.,]+)/g)].map((m) => m[1]);
-    const proxFactMatch = text.match(/Próxima facturación\s*(\d{2}\/\d{2}\/\d{4})/);
-    return {
-      label,
-      nacDisponible: nacDisponible?.[1],
-      nacUtilizado: nacUtilizado?.[1],
-      intDisponible: intUsdValues[2] || null,
-      intUtilizado: intUsdValues[1] || null,
-      intTotal: intUsdValues[0] || null,
-      proxFact: proxFactMatch?.[1],
-    };
-  });
-
-  if (tcInfo.label) {
-    const nacUsed = parseChileanAmount(tcInfo.nacUtilizado || "0");
-    const nacAvailable = parseChileanAmount(tcInfo.nacDisponible || "0");
-    const card: CreditCardBalance = {
-      label: tcInfo.label,
-      national: { used: nacUsed, available: nacAvailable, total: nacUsed + nacAvailable },
-      movements: [],
-    };
-    if (tcInfo.intDisponible) {
-      const parseUsd = (s: string) => parseFloat(s.replace(/\./g, "").replace(",", ".")) || 0;
-      card.international = {
-        used: Math.abs(parseUsd(tcInfo.intUtilizado || "0")),
-        available: parseUsd(tcInfo.intDisponible || "0"),
-        total: parseUsd(tcInfo.intTotal || "0"),
-        currency: "USD",
-      };
-    }
-    if (tcInfo.proxFact) card.nextBillingDate = normalizeDate(tcInfo.proxFact);
-    creditCards.push(card);
-  }
+  // El parseo del resumen (etiqueta, cupos, próxima facturación) es una función pura sobre
+  // el texto visible; así se prueba offline (ver `parseCreditCardSummary`).
+  const summaryText = await page.evaluate(() => document.body?.innerText || "");
+  const card = parseCreditCardSummary(summaryText);
+  if (card) creditCards.push(card);
 
   // No facturados: la internacional (USD) no se pagina; la nacional (CLP) usa
   // el widget Dojo que re-renderiza la tabla al clickear a[name="nextbtn"].
@@ -213,66 +242,15 @@ export async function extractCreditCardData(
   // Facturados
   await openBilledNational(page);
   await doSaveHtml(page, "08-tc-cuenta-nacional");
-
-  const facturados = await page.evaluate(() => {
-    const results: Array<{
-      date: string;
-      desc: string;
-      total: string;
-      cuota: string;
-      valorCuota: string;
-    }> = [];
-    const table = document.querySelector('table[name="operacion_Table"]');
-    const rows = table ? table.querySelectorAll("tbody tr") : [];
-    for (const row of rows) {
-      const cells = Array.from(row.querySelectorAll("td"));
-      if (cells.length < 8) continue;
-      const dateText = cells[1]?.innerText?.trim() || "";
-      if (!/^\d{2}\/\d{2}\/\d{4}$/.test(dateText)) continue;
-      results.push({
-        date: dateText,
-        desc: cells[3]?.innerText?.trim() || "",
-        total: cells[5]?.innerText?.trim() || "",
-        cuota: cells[6]?.innerText?.trim() || "",
-        valorCuota: cells[7]?.innerText?.trim() || "",
-      });
-    }
-    return results;
-  });
-
-  movements.push(...normalizeItauBilledRows(facturados));
-  debugLog.push(`  Facturados: ${facturados.length}`);
+  const billed = await extractBilledRows(page, "national");
+  movements.push(...billed);
+  debugLog.push(`  Facturados: ${billed.length}`);
 
   // Facturados internacionales (USD): tabla propia del estado de cuenta internacional.
   await openBilledInternational(page);
   await doSaveHtml(page, "08-tc-cuenta-internacional");
-
-  const intlBilled = await page.evaluate((cells) => {
-    const table = document.querySelector('[id$="estadoDeCuentaTarjetarecord_table"]');
-    const results: Array<{ date: string; desc: string; amount: string; isCredit: boolean }> = [];
-    if (!table) return results;
-    for (const row of table.querySelectorAll("tr")) {
-      const dateEl = row.querySelector(`[name="${cells.date}"]`) as HTMLElement | null;
-      const descEl = row.querySelector(`[name="${cells.desc}"]`) as HTMLElement | null;
-      const amountEl = row.querySelector(`[name="${cells.amount}"]`) as HTMLElement | null;
-      const date = (dateEl?.innerText || "").trim();
-      if (!/^\d{2}\/\d{2}\/\d{4}$/.test(date) || !descEl || !amountEl) continue;
-      results.push({
-        date,
-        desc: (descEl.innerText || "").trim(),
-        amount: (amountEl.innerText || "").trim(),
-        isCredit: amountEl.className.includes("abono"),
-      });
-    }
-    return results;
-  }, INTL_CELLS);
-
-  movements.push(
-    ...normalizeItauCreditCardRows(intlBilled, {
-      source: MOVEMENT_SOURCE.credit_card_billed,
-      currency: "USD",
-    })
-  );
+  const intlBilled = await extractBilledRows(page, "international");
+  movements.push(...intlBilled);
   debugLog.push(`  Facturados internacionales: ${intlBilled.length}`);
 
   return { movements, creditCards };
