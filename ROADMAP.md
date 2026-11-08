@@ -22,6 +22,17 @@ Falabella es el único banco que no pasa por `runScraper`/`BrowserSession`: usa 
 
 **Para retomarlo:** tener una cuenta Falabella con CMR, correr `npm run smoke -- falabella` antes y después del port y comparar el JSON (cuentas, movimientos, cupos).
 
+## Itaú: pendientes conocidos
+
+**Estado:** funcional (cuenta, saldo y tarjeta nacional e internacional). Lo que sigue falta por decidir, por ver el portal real o por implementar. Límites actuales en el [README](README.md#itaú-alcance-y-límites).
+
+- **Cobertura de `since`** · _requiere la página real._ La cartola que se lee es «Últimos 30 movimientos» y `since` se ignora. bort lo envía y espera líneas `ADVERTENCIA` / `→ cartola` en `debug` (como bchile). Falta explorar «Cartola histórica» (`/cuentas/cuenta-corriente/cartola-historica`) para ver si permite un rango de fechas, y los estados de cuenta anteriores de la tarjeta (hoy solo se lee el último). Mientras tanto, Itaú puede avisar cuando el movimiento más antiguo no alcanza `since`.
+- **Tiempo del scrape** · _sin bloqueo, falta implementarlo._ Una corrida toma entre 77 y 84 s; bort declara `maxDuration = 120` en `/api/bank/sync` y da un sync por colgado a los 3 min. Unos 20 s son dos timeouts de 10 s al final de cada paginación: el botón «siguiente» nunca se deshabilita y el paginador dice «N de M». Leer ese «de M» y parar ahí lo evita, y quita el log «loaded page N+1» de una página que no existe.
+- **Etiqueta de cuenta, línea de crédito y cuenta en dólares** · _requiere decisión y coordinar con bort._ `accounts[].label` no se informa y bort identifica la cuenta por (conexión, label): ponerlo parte la cuenta existente en dos y hace falta migrarla. La línea de crédito (cupo utilizado y disponible en el home) y la cuenta en dólares no se extraen; falta definir cómo modelarlas (otra entrada en `accounts[]` con su label).
+- **Datos del estado de cuenta** · _sin bloqueo._ `lastStatement` (período facturado, «Pagar hasta», monto total facturado, monto mínimo), `nextDueDate` y `billingPeriod` están en `/tarjeta-credito/resumen/cuenta-nacional` y no se informan (bchile y falabella sí). bort hoy no los lee.
+- **Filas `00/NN` y cuotas de pago único** · _requiere decisión._ Las filas de la sección 4 del estado de cuenta nacional («Información compras en cuotas en el período», cuota `00/NN`) se informan como facturadas y parecen informativas. Los no facturados de pago único salen sin `installments`: la celda viene vacía y esa tabla no distingue una compra de una comisión.
+- **Sin verificar** · _requiere cuenta o entorno._ El 2FA (Itaú Key) no se ha gatillado en las corridas de prueba; con varias tarjetas solo se toma la primera (la cuenta de prueba tiene una y sin selector); el entorno de bort (Alpine, Chromium, Xvfb y proxy), donde Imperva puede comportarse distinto que en una Mac.
+
 ## Bancos por agregar
 
 Banco Ripley, Banco Consorcio, Coopeuch, Tenpo y Mach. Ver [CONTRIBUTING.md](CONTRIBUTING.md).

@@ -6,6 +6,7 @@ import {
   normalizeItauBilledRows,
   normalizeItauCreditCardRows,
   parseCreditCardSummary,
+  parseItauBalance,
   type ItauExtraction,
 } from "./parse.js";
 
@@ -277,6 +278,34 @@ describe("parseCreditCardSummary", () => {
 
   it("devuelve undefined cuando la página no trae una tarjeta", () => {
     expect(parseCreditCardSummary("Sin productos contratados")).toBeUndefined();
+  });
+});
+
+// ─── parseItauBalance ────────────────────────────────────────────
+
+// La página de saldos trae tres saldos: el que sirve es el disponible para uso.
+const balancePageText = (disponibleParaUso: string) =>
+  [
+    "Cuenta Corriente 0123456789",
+    "Moneda CLP",
+    `Saldo disponible para uso $ ${disponibleParaUso}`,
+    "Retenciones",
+    "$ 34.567",
+    "Saldo total contable $ 1.234.567",
+    "Saldo disponible Línea de crédito $ 9.999.999",
+  ].join("\n");
+
+describe("parseItauBalance", () => {
+  it("lee el saldo disponible para uso, no el contable ni el de la línea de crédito", () => {
+    expect(parseItauBalance(balancePageText("1.200.000"))).toBe(1200000);
+  });
+
+  it("un saldo en 0 es una lectura válida, no una página sin saldo", () => {
+    expect(parseItauBalance(balancePageText("0"))).toBe(0);
+  });
+
+  it("devuelve undefined cuando la página todavía no trae el saldo", () => {
+    expect(parseItauBalance("Saldos a la fecha\nEspere un momento...")).toBeUndefined();
   });
 });
 

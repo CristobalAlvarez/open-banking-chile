@@ -8,6 +8,7 @@ import {
   normalizeItauBilledRows,
   normalizeItauCreditCardRows,
   parseCreditCardSummary,
+  parseItauBalance,
 } from "./parse.js";
 import {
   openAccountMovements,
@@ -25,12 +26,7 @@ export async function extractBalance(
   debugLog.step("Extracting balance...");
   await openBalance(page);
   await doSaveHtml(page, "06-balance");
-  const balance = await page.evaluate(() => {
-    const text = document.body?.innerText || "";
-    const match = text.match(/Saldo disponible para uso\s*\$\s*([\d.,]+)/);
-    if (match) return parseInt(match[1].replace(/[^0-9]/g, ""), 10);
-    return undefined;
-  });
+  const balance = parseItauBalance(await page.evaluate(() => document.body?.innerText || ""));
   if (balance !== undefined) debugLog.push(`  Balance: $${balance.toLocaleString("es-CL")}`);
   return balance;
 }

@@ -41,7 +41,7 @@
 - Cada banco es un directorio (`index`, `login`, `navigation`, `parse`, …) siguiendo la plantilla `src/banks/edwards/`.
 - `utils.ts` se repartió en `core/`, `browser/` y `steps/`; `actions/` pasó a `steps/` e `infrastructure/` a `browser/`.
 - Falabella sigue sobre Playwright (launcher en `src/browser/playwright.ts`); es la única excepción a `runScraper`.
-- Itaú: la extracción de los estados de cuenta facturados (nacional e internacional) pasó a `extractBilledRows` y el parseo del resumen de la tarjeta (etiqueta, cupos, próxima facturación) a `parseCreditCardSummary`, función pura sobre el texto de la página. Ambas se prueban contra fixtures/texto sintéticos junto con la cartola de la cuenta. Verificado en vivo: la tabla nacional trae la cuota actual y total (`NN/NN`) en todas las filas facturadas y en las no facturadas que son compras en cuotas.
+- Itaú: la extracción de los estados de cuenta facturados (nacional e internacional) pasó a `extractBilledRows`, y el parseo del resumen de la tarjeta (etiqueta, cupos, próxima facturación), del saldo y el armado del resultado a funciones puras sobre texto (`parseCreditCardSummary`, `parseItauBalance`, `assembleItauResult`). Se prueban contra fixtures/texto sintéticos, junto con la cartola de la cuenta, el login (resultados, patrones de error, detección del portal con sesión), la navegación y el paso de paginación compartido (`steps/pagination`), que no tenía tests. Verificado en vivo: la tabla nacional trae la cuota actual y total (`NN/NN`) en todas las filas facturadas y en las no facturadas que son compras en cuotas.
 
 ## 2.0.0
 

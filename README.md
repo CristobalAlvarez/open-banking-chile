@@ -297,6 +297,15 @@ Itaú corre detrás de Imperva (reese84). El login usa `#loginNameID` / `#pswdId
 - **Facturados** (`credit_card_billed`): el `amount` es el **valor cuota** (lo que se carga al período), no el monto original de la compra. Para compras en cuotas, `totalAmount` lleva el monto total de la operación ("Monto total a pagar"). `installments` viene en todas las filas; el pago único es `"01/01"`.
 - **Internacional** (USD): sus movimientos (facturados del estado de cuenta internacional y no facturados) se reportan con `currency: "USD"` y montos en dólares; el cupo queda en `creditCards[].international`. Esas tablas no tienen columna de cuotas: `installments` queda ausente.
 
+### Itaú: alcance y límites
+
+- **Cuenta corriente en pesos**: solo los «Últimos 30 movimientos» que muestra el portal. `since` no se usa: si hubo más de 30 movimientos desde el último sync, los anteriores no están disponibles. `accounts[].label` no se informa.
+- **Una tarjeta de crédito**: la de la página de deuda (cupos nacional e internacional, movimientos facturados y no facturados). No se leen otras tarjetas ni adicionales.
+- **Productos que no se leen**: línea de crédito y cuenta corriente en dólares.
+- **Fallos explícitos**: si el portal no muestra la sesión iniciada (clave rechazada o un paso intermedio del banco) o, ya con sesión, no se puede leer ni saldo, ni cartola ni tarjeta, devuelve `success: false` con el motivo. Si solo falta una parte (el saldo, o la tarjeta con movimientos), deja una línea `ADVERTENCIA` en `debug`.
+
+Lo pendiente y lo que lo bloquea está en el [ROADMAP](ROADMAP.md).
+
 ### BancoEstado y modo headless
 
 BancoEstado detecta navegadores headless a nivel de red (TLS fingerprinting), no solo por JavaScript. Ni `puppeteer-extra-plugin-stealth` ni `rebrowser-puppeteer-core` logran evadir esta detección. El scraper siempre corre en modo headful (Chrome visible).

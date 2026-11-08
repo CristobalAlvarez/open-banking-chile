@@ -143,6 +143,20 @@ export function parseCreditCardSummary(text: string): CreditCardBalance | undefi
   return card;
 }
 
+// ─── Saldo de la cuenta ──────────────────────────────────────────
+
+/**
+ * Saldo disponible para uso de la cuenta corriente, a partir del texto de la página de saldos.
+ *
+ * La misma página trae "Saldo total contable" y "Saldo disponible Línea de crédito": solo se lee
+ * el primero, lo que el cliente puede usar de su cuenta (el contable menos las retenciones).
+ * Devuelve `undefined` si el texto no lo trae; un saldo en 0 es una lectura válida.
+ */
+export function parseItauBalance(text: string): number | undefined {
+  const match = text.match(/Saldo disponible para uso\s*\$\s*([\d.,]+)/);
+  return match ? parseChileanAmount(match[1]) : undefined;
+}
+
 // ─── Resultado final ─────────────────────────────────────────────
 
 /** Lo que se leyó del portal, antes de armar el resultado. */
