@@ -25,6 +25,7 @@
   - **estado de cuenta internacional**: sus movimientos (pagos, compras y comisiones, en USD) nunca se leían porque el código buscaba otras secciones; ahora se informan con `currency: "USD"` y sin las filas de subtotal;
   - una fila del estado nacional sin fecha (algunos avances) lanzaba un error que se tragaba en silencio y cortaba el resto del estado: se perdía una parte de los facturados. Ahora usa la fecha de facturación, el error ya no se oculta (queda en `debug`) y se omiten las filas `TOTAL TARJETA …` que se colaban como movimientos.
 - **Itaú** (detectado en corridas reales): el cupo internacional (USD) devolvía `available` y `total` cruzados cuando el cupo estaba en uso (se leía por posición fija y el portal los muestra como disponible, utilizado, total). Ahora se empareja cada valor con su etiqueta.
+- **Itaú**: un login que fallaba por una causa no reconocida (el mensaje «clave incorrecta» no calzaba con las palabras buscadas, o un paso intermedio del banco) podía seguir como éxito y devolver cuenta y tarjeta vacías, que un consumidor registraría como un sync correcto. Ahora exige ver el portal con sesión (enlace «Cerrar sesión») y, si no, devuelve `success: false` con el motivo. También falla cuando, ya con sesión, no se pudo leer ni saldo, ni cartola ni tarjeta. Si la lectura es parcial (sin saldo, o movimientos de tarjeta sin tarjeta identificada) queda una línea `ADVERTENCIA` en `debug`.
 - Cencosud: el error de CAPTCHA en headless ya no menciona el flag `--headful` del CLI eliminado.
 
 ### Añadido

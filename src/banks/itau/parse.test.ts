@@ -1,9 +1,12 @@
 import { describe, it, expect } from "vitest";
 import { MOVEMENT_SOURCE } from "../../core/types.js";
+import type { BankMovement, CreditCardBalance } from "../../core/types.js";
 import {
+  assembleItauResult,
   normalizeItauBilledRows,
   normalizeItauCreditCardRows,
   parseCreditCardSummary,
+  type ItauExtraction,
 } from "./parse.js";
 
 // ─── normalizeItauBilledRows ─────────────────────────────────────
@@ -274,5 +277,102 @@ describe("parseCreditCardSummary", () => {
 
   it("devuelve undefined cuando la página no trae una tarjeta", () => {
     expect(parseCreditCardSummary("Sin productos contratados")).toBeUndefined();
+  });
+});
+
+// ─── assembleItauResult ──────────────────────────────────────────
+
+const accountMovement: BankMovement = {
+  date: "01-10-2026",
+  description: "COMPRA EJEMPLO",
+  amount: -1000,
+  balance: 5000,
+  source: MOVEMENT_SOURCE.account,
+};
+
+const cardCharge = (description: string): BankMovement => ({
+  date: "02-10-2026",
+  description,
+  amount: -2000,
+  balance: 0,
+  source: MOVEMENT_SOURCE.credit_card_billed,
+});
+
+const cardWithLabel = (label: string): CreditCardBalance => ({ label, movements: [] });
+
+// Lo mínimo que hay que leer para que el resultado sea válido: el saldo.
+const extraction = (overrides: Partial<ItauExtraction> = {}): ItauExtraction => ({
+  balance: 1000,
+  accountMovements: [],
+  creditCards: [],
+  creditCardMovements: [],
+  ...overrides,
+});
+
+describe("assembleItauResult", () => {
+  it("adjunta los movimientos a la tarjeta y los marca con su máscara, sin tocar los originales", () => {
+    const charge = cardCharge("COMERCIO EJEMPLO");
+    const result = assembleItauResult(
+      extraction({
+        creditCards: [cardWithLabel("Mastercard Legend ****1234")],
+        creditCardMovements: [charge],
+      })
+    );
+
+    expect(result).toMatchObject({
+      ok: true,
+      creditCards: [
+        {
+          label: "Mastercard Legend ****1234",
+          movements: [{ description: "COMERCIO EJEMPLO", card: "****1234" }],
+        },
+      ],
+    });
+    expect(charge.card).toBeUndefined();
+  });
+
+  it("deja los movimientos sin `card` cuando la etiqueta no trae máscara", () => {
+    const result = assembleItauResult(
+      extraction({
+        creditCards: [cardWithLabel("Mastercard Legend")],
+        creditCardMovements: [cardCharge("COMERCIO EJEMPLO")],
+      })
+    );
+
+    expect(result.ok && result.creditCards[0].movements).toEqual([cardCharge("COMERCIO EJEMPLO")]);
+  });
+
+  it("informa el saldo y los movimientos de la cuenta", () => {
+    const result = assembleItauResult(extraction({ accountMovements: [accountMovement] }));
+
+    expect(result.ok && result.accounts).toEqual([{ balance: 1000, movements: [accountMovement] }]);
+  });
+
+  it("falla cuando no se leyó nada: ni saldo, ni cartola, ni tarjeta", () => {
+    expect(assembleItauResult(extraction({ balance: undefined })).ok).toBe(false);
+  });
+
+  it("un saldo en 0 o una cuenta sin movimientos es una lectura válida, no un fallo", () => {
+    expect(assembleItauResult(extraction({ balance: 0 })).ok).toBe(true);
+  });
+
+  it("advierte cuando falta el saldo pero sí hay otros datos", () => {
+    const result = assembleItauResult(
+      extraction({ balance: undefined, accountMovements: [accountMovement] })
+    );
+
+    expect(result).toMatchObject({ ok: true, warnings: [expect.stringMatching(/saldo/)] });
+  });
+
+  it("advierte que no informa los movimientos de tarjeta cuando no se identificó la tarjeta", () => {
+    const result = assembleItauResult(
+      extraction({ creditCardMovements: [cardCharge("COMERCIO EJEMPLO")] })
+    );
+
+    expect(result).toMatchObject({
+      ok: true,
+      creditCards: [],
+      warnings: [expect.stringMatching(/sin tarjeta identificada/)],
+    });
   });
 });

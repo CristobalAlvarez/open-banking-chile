@@ -41,7 +41,9 @@ export async function extractMovements(
   doSaveHtml: (page: Page, name: string) => Promise<void>
 ): Promise<BankMovement[]> {
   debugLog.step("Extracting movements...");
-  await openAccountMovements(page);
+  if (!(await openAccountMovements(page))) {
+    debugLog.push("  La cartola no cargó: no apareció la tabla de movimientos");
+  }
 
   // Tabla WebSphere: Fecha | Movimientos | Cargos | Abonos | Saldos | Documentos,
   // paginada con el widget Dojo (a[name="nextbtn"]) que re-renderiza la tabla.
@@ -211,7 +213,9 @@ export async function extractCreditCardData(
   const movements: BankMovement[] = [];
   const creditCards: CreditCardBalance[] = [];
 
-  await openCreditCardDebt(page);
+  if (!(await openCreditCardDebt(page))) {
+    debugLog.push("  Deuda: no apareció ninguna tabla de movimientos no facturados");
+  }
   await doSaveHtml(page, "08-tc-deuda");
 
   // El parseo del resumen (etiqueta, cupos, próxima facturación) es una función pura sobre
@@ -240,14 +244,18 @@ export async function extractCreditCardData(
   debugLog.push(`  No-facturados: ${unbilled.length}`);
 
   // Facturados
-  await openBilledNational(page);
+  if (!(await openBilledNational(page))) {
+    debugLog.push("  Estado de cuenta nacional: no apareció la tabla de movimientos");
+  }
   await doSaveHtml(page, "08-tc-cuenta-nacional");
   const billed = await extractBilledRows(page, "national");
   movements.push(...billed);
   debugLog.push(`  Facturados: ${billed.length}`);
 
   // Facturados internacionales (USD): tabla propia del estado de cuenta internacional.
-  await openBilledInternational(page);
+  if (!(await openBilledInternational(page))) {
+    debugLog.push("  Estado de cuenta internacional: no apareció la tabla de movimientos");
+  }
   await doSaveHtml(page, "08-tc-cuenta-internacional");
   const intlBilled = await extractBilledRows(page, "international");
   movements.push(...intlBilled);

@@ -1,4 +1,9 @@
-import type { BankMovement, CreditCardBalance, MovementSource } from "../../core/types.js";
+import type {
+  AccountBalance,
+  BankMovement,
+  CreditCardBalance,
+  MovementSource,
+} from "../../core/types.js";
 import { MOVEMENT_SOURCE } from "../../core/types.js";
 import {
   parseChileanAmount,
@@ -136,4 +141,65 @@ export function parseCreditCardSummary(text: string): CreditCardBalance | undefi
   const nextBilling = text.match(/Próxima facturación\s*(\d{2}\/\d{2}\/\d{4})/)?.[1];
   if (nextBilling) card.nextBillingDate = normalizeDate(nextBilling);
   return card;
+}
+
+// ─── Resultado final ─────────────────────────────────────────────
+
+/** Lo que se leyó del portal, antes de armar el resultado. */
+export interface ItauExtraction {
+  balance: number | undefined;
+  accountMovements: BankMovement[];
+  creditCards: CreditCardBalance[];
+  creditCardMovements: BankMovement[];
+}
+
+/**
+ * Arma `accounts` y `creditCards` con lo leído, o dice que no se leyó nada.
+ *
+ * Itaú muestra una sola tarjeta: todos los movimientos de tarjeta son de ella y quedan marcados
+ * con su máscara (`****1234`). Si no se pudo leer nada (ni saldo, ni cartola, ni tarjeta), la
+ * sesión no sirvió o el portal no cargó: es un fallo, no una cuenta vacía. Lo que falta cuando
+ * sí hubo datos se devuelve en `warnings`, para dejarlo en el debug log como `ADVERTENCIA`.
+ */
+export function assembleItauResult(
+  extraction: ItauExtraction
+):
+  | { ok: true; accounts: AccountBalance[]; creditCards: CreditCardBalance[]; warnings: string[] }
+  | { ok: false; error: string } {
+  const { balance, accountMovements, creditCards, creditCardMovements } = extraction;
+  const [card, ...otherCards] = creditCards;
+
+  if (
+    balance === undefined &&
+    accountMovements.length === 0 &&
+    !card &&
+    creditCardMovements.length === 0
+  ) {
+    return {
+      ok: false,
+      error:
+        "Itaú: la sesión está iniciada pero no se pudo leer ningún dato (saldo, cartola ni tarjeta). " +
+        "El portal pudo no cargar o haber cambiado de formato.",
+    };
+  }
+
+  const warnings: string[] = [];
+  if (balance === undefined) warnings.push("no se pudo leer el saldo de la cuenta");
+  if (!card && creditCardMovements.length > 0) {
+    warnings.push(
+      `${creditCardMovements.length} movimientos de tarjeta sin tarjeta identificada: no se informan`
+    );
+  }
+
+  const mask = card?.label.match(/\*{4}\d{4}/)?.[0];
+  const cardWithMovements = card && {
+    ...card,
+    movements: creditCardMovements.map((m) => (mask ? { ...m, card: mask } : m)),
+  };
+  return {
+    ok: true,
+    accounts: [{ balance, movements: accountMovements }],
+    creditCards: cardWithMovements ? [cardWithMovements, ...otherCards] : [],
+    warnings,
+  };
 }

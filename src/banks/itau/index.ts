@@ -1,15 +1,11 @@
-import type {
-  AccountBalance,
-  BankScraper,
-  ScrapeResult,
-  ScraperOptions,
-} from "../../core/types.js";
+import type { BankScraper, ScrapeResult, ScraperOptions } from "../../core/types.js";
 import { runScraper } from "../../browser/scraper-runner.js";
 import type { BrowserSession } from "../../browser/browser.js";
 import { failScrape } from "../../browser/result.js";
 import { closePopups } from "../../steps/popups.js";
 import { login } from "./login.js";
 import { extractBalance, extractCreditCardData, extractMovements } from "./extract.js";
+import { assembleItauResult } from "./parse.js";
 
 const BANK_ID = "itau";
 
@@ -33,29 +29,28 @@ async function scrapeItau(session: BrowserSession, options: ScraperOptions): Pro
   progress("Extrayendo datos de tarjeta de crédito...");
   const tcResult = await extractCreditCardData(page, debugLog, doSaveHtml);
 
-  // extractCreditCardData returns card movements in a separate array. Attach them
-  // to their card, otherwise consumers never receive them (bort reads
-  // creditCards[].movements). Itaú exposes a single card, so all belong to it.
-  const card = tcResult.creditCards[0];
-  if (card) {
-    const mask = card.label.match(/\*{4}\d{4}/)?.[0];
-    if (mask) for (const m of tcResult.movements) m.card = mask;
-    card.movements = tcResult.movements;
-  }
+  const assembled = assembleItauResult({
+    balance,
+    accountMovements,
+    creditCards: tcResult.creditCards,
+    creditCardMovements: tcResult.movements,
+  });
+  if (!assembled.ok) return failScrape(session, BANK_ID, assembled.error);
+  for (const warning of assembled.warnings) debugLog.push(`  ADVERTENCIA: ${warning}`);
 
-  const totalTc = card?.movements?.length ?? 0;
+  const { accounts, creditCards } = assembled;
+  const totalTc = creditCards[0]?.movements?.length ?? 0;
 
   debugLog.step(`Total: ${accountMovements.length} account + ${totalTc} TC movements`);
   progress(`Listo — ${accountMovements.length + totalTc} movimientos totales`);
   await doSave(page, "05-final");
   const ss = doScreenshots ? await page.screenshot({ encoding: "base64" }) : undefined;
 
-  const accounts: AccountBalance[] = [{ balance, movements: accountMovements }];
   return {
     success: true,
     bank: BANK_ID,
     accounts,
-    creditCards: tcResult.creditCards.length > 0 ? tcResult.creditCards : undefined,
+    creditCards: creditCards.length > 0 ? creditCards : undefined,
     screenshot: ss,
     debug: debugLog.join("\n"),
   };
