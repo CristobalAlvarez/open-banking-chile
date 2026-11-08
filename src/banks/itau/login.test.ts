@@ -3,7 +3,7 @@ import type { Page } from "puppeteer-core";
 import type { BrowserSession } from "../../browser/browser.js";
 import { DebugLog } from "../../core/debug-log.js";
 import { domPage, pageFromHtml } from "../../testing/dom.js";
-import { findLoginError, hasPortalShell, login } from "./login.js";
+import { findLoginError, hasPortalShell, isBlockedText, login } from "./login.js";
 
 // `login` espera con `delay` (2–3 s) entre pasos; en el test no hay nada que esperar.
 vi.mock("../../core/delay.js", () => ({ delay: () => Promise.resolve() }));
@@ -88,6 +88,24 @@ describe("login", () => {
     expect(blocked).toMatch(/bloque/i);
     expect(missing).toMatch(/campo de RUT/);
   });
+
+  it("informa el bloqueo de Imperva al enviar el login sin culpar a la clave", async () => {
+    // Es lo que se vio en una corrida real: la página queda con el aviso de Imperva y nada más.
+    const incapsula = "<p>Request unsuccessful. Incapsula incident ID: 623000080194618191-91</p>";
+    const session = loginSession(LOGIN_FORM, incapsula);
+
+    const error = await login(session, credentials);
+
+    expect(error).toMatch(/Imperva/);
+    expect(error).not.toMatch(/RUT y clave/);
+    expect(session.debugLog.join("\n")).toContain("Incapsula incident ID");
+  });
+
+  it("reconoce el aviso de Imperva también cuando reemplaza al formulario de login", async () => {
+    const incapsula = "<p>Request unsuccessful. Incapsula incident ID: 623000080194618191-91</p>";
+
+    expect(await login(loginSession(incapsula), credentials)).toMatch(/bloque/i);
+  });
 });
 
 describe("findLoginError", () => {
@@ -114,6 +132,22 @@ describe("findLoginError", () => {
   it("devuelve undefined cuando no hay mensajes de error", () => {
     expect(findLoginError([])).toBeUndefined();
     expect(findLoginError(["¿Sigues con nosotros?"])).toBeUndefined();
+  });
+});
+
+describe("isBlockedText", () => {
+  it.each([
+    "Access Denied",
+    "Pardon Our Interruption",
+    "Request unsuccessful. Incapsula incident ID: 623000080194618191-91",
+  ])("reconoce el bloqueo «%s»", (text) => {
+    expect(isBlockedText(text)).toBe(true);
+  });
+
+  it("no confunde el login ni el portal con un bloqueo", () => {
+    expect(isBlockedText("Ingresa tu RUT y clave")).toBe(false);
+    expect(isBlockedText("Saldos y últimos movimientos Cerrar sesión")).toBe(false);
+    expect(isBlockedText("")).toBe(false);
   });
 });
 

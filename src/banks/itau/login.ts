@@ -19,6 +19,11 @@ const SESSION_CONFIRM_TIMEOUT_MS = 15000;
 // ("Clave incorrecta", "Rut o clave incorrectos", "Cuenta bloqueada").
 const LOGIN_ERROR_PATTERN = /incorrect[oa]s?|bloquead[oa]s?|suspendid[oa]s?|inv[aá]lid[oa]s?/i;
 
+// Páginas con las que Imperva bloquea a la sesión: antes del login ("Access Denied", un
+// challenge) o al enviarlo ("Request unsuccessful. Incapsula incident ID: …").
+const BLOCKED_PATTERN =
+  /Access Denied|Acceso restringido|Pardon Our Interruption|actividad inusual|No pudimos validar tu acceso|Request unsuccessful|Incapsula incident/i;
+
 /**
  * Waits for the Itaú login form to be usable.
  *
@@ -33,20 +38,19 @@ async function waitForLoginForm(page: Page): Promise<"ok" | "blocked" | "timeout
     return "ok";
   } catch {
     // waitForSelector tolerates the navigations the Imperva challenge performs.
-    const blocked = await page
-      .evaluate(() =>
-        /Access Denied|Acceso restringido|Pardon Our Interruption|actividad inusual|No pudimos validar tu acceso/i.test(
-          document.body?.innerText || ""
-        )
-      )
-      .catch(() => false);
-    return blocked ? "blocked" : "timeout";
+    const text = await page.evaluate(() => document.body?.innerText || "").catch(() => "");
+    return isBlockedText(text) ? "blocked" : "timeout";
   }
 }
 
 /** Primer mensaje que habla de credenciales rechazadas, o `undefined` si ninguno lo hace. */
 export function findLoginError(messages: string[]): string | undefined {
   return messages.find((message) => LOGIN_ERROR_PATTERN.test(message));
+}
+
+/** ¿El texto de la página es un bloqueo de Imperva y no el login ni el portal? */
+export function isBlockedText(text: string): boolean {
+  return BLOCKED_PATTERN.test(text);
 }
 
 /**
@@ -154,6 +158,16 @@ export async function login(
   // (puede traer tokens).
   if (!(await confirmSession(page))) {
     debugLog.push(`  Sesión no confirmada; página actual: ${page.url().replace(/[?#].*$/, "")}`);
+    const pageText = await page.evaluate(() => document.body?.innerText || "").catch(() => "");
+    // Imperva puede bloquear el envío del formulario: la página queda con su aviso y sin ningún
+    // mensaje del banco. No tiene que ver con la clave, y culparla manda al usuario a cambiarla.
+    if (isBlockedText(pageText)) {
+      debugLog.push(`  Aviso de Imperva: ${pageText.replace(/\s+/g, " ").trim().slice(0, 200)}`);
+      return (
+        "Itaú bloqueó el inicio de sesión (protección anti-bot Imperva). " +
+        "No indica que la clave sea incorrecta: reintenta más tarde."
+      );
+    }
     return (
       "No se pudo confirmar el inicio de sesión en Itaú. Verifica tu RUT y clave, o si el banco " +
       "pide un paso adicional en su sitio (cambio de clave, actualización de datos)."

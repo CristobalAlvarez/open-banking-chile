@@ -291,6 +291,8 @@ Itaú corre detrás de Imperva (reese84). El login usa `#loginNameID` / `#pswdId
 - **headless**: cualquier sesión headless queda bloqueada (probado con `puppeteer-core` y `rebrowser-puppeteer-core`). El scraper fuerza headful; en Linux requiere Xvfb (`DISPLAY=:99`).
 - **User-Agent falso**: el User-Agent por defecto está fijo en `Chrome/131` y no calza con el Chrome instalado, lo que delata la automatización. Itaú usa `skipUserAgentOverride` para conservar el UA real.
 
+Además, tras varias corridas seguidas desde la misma IP, Imperva respondió al envío del login con «Request unsuccessful. Incapsula incident ID: …». El scraper lo informa como bloqueo anti-bot, no como clave incorrecta; si ocurre, espera antes de reintentar.
+
 ### Itaú: movimientos de tarjeta de crédito
 
 - **No facturados** (`credit_card_unbilled`): se extraen de la página de deuda con la paginación completa (widget Dojo). Las compras en cuotas traen `installments` tal como las muestra el banco (`NN/NN`, cuota actual / total); en pagos únicos, comisiones y abonos el banco deja la celda vacía y `installments` queda ausente (no se inventa).
@@ -302,7 +304,7 @@ Itaú corre detrás de Imperva (reese84). El login usa `#loginNameID` / `#pswdId
 - **Cuenta corriente en pesos**: solo los «Últimos 30 movimientos» que muestra el portal. `since` no se usa: si hubo más de 30 movimientos desde el último sync, los anteriores no están disponibles. `accounts[].label` no se informa.
 - **Una tarjeta de crédito**: la de la página de deuda (cupos nacional e internacional, movimientos facturados y no facturados). No se leen otras tarjetas ni adicionales.
 - **Productos que no se leen**: línea de crédito y cuenta corriente en dólares.
-- **Fallos explícitos**: si el portal no muestra la sesión iniciada (clave rechazada o un paso intermedio del banco) o, ya con sesión, no se puede leer ni saldo, ni cartola ni tarjeta, devuelve `success: false` con el motivo. Si solo falta una parte (el saldo, o la tarjeta con movimientos), deja una línea `ADVERTENCIA` en `debug`.
+- **Fallos explícitos**: si el portal no muestra la sesión iniciada (clave rechazada, bloqueo de Imperva al enviar el login o un paso intermedio del banco) o, ya con sesión, no se puede leer ni saldo, ni cartola ni tarjeta, devuelve `success: false` con el motivo. Si solo falta una parte (el saldo, o la tarjeta con movimientos), deja una línea `ADVERTENCIA` en `debug`.
 
 Lo pendiente y lo que lo bloquea está en el [ROADMAP](ROADMAP.md).
 
